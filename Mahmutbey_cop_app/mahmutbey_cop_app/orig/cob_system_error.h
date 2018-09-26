@@ -1,0 +1,11 @@
+#ifndef __COP_SYSTEM_ERROR_H__
+#define __COP_SYSTEM_ERROR_H__
+
+#define ERROR_IP_SETUP_ERR	1
+#define ERROR_CODEC_HW_1_ERR	2
+#define ERROR_CODEC_HW_2_ERR	3
+#define ERROR_CODEC_HW_3_ERR	4
+#define ERROR_CODEC_HW_4_ERR	5
+#define ERROR_AVC_CALL_PROTOCOL_ERR	6
+
+#endif //  __COP_SYSTEM_ERROR_H__

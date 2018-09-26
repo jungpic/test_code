@@ -263,7 +263,7 @@ int setup_local_time(void)
 #endif
 
     tm_val.tm_year = year - 1900;
-    tm_val.tm_mon = mon;
+    tm_val.tm_mon = mon-1;
     tm_val.tm_mday = mday;
     tm_val.tm_hour = hour;
     tm_val.tm_min = min;

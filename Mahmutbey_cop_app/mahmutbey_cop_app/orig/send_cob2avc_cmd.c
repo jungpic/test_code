@@ -23,11 +23,27 @@
 #include "cob_process.h"
 #include "audio_multicast.h"
 
+enum SUB_DEV_ID
+{
+    ID_NONE,
+    PIB,
+    SCAM,
+    FCAM,
+    COP,
+    PAMP,
+    PEI,
+    LRM,
+    PID,
+    DIF,
+    NVR
+};
+
 static int inout_key_pushed_status = 0;
 int passive_in_button;
 int passive_out_button;
 
 static void print_cop2avc_packet(packet_COP2AVC_t *packet);
+static void print_ctm2avc_packet(packet_CTM2AVC_SW_UPDATE_t *packet);
 
 int send_cop2avc_packet_init(void)
 {
@@ -84,12 +100,28 @@ static void cop2avc_packet_last_fill(packet_COP2AVC_t *packet, unsigned short st
     unsigned short crc16;
     unsigned char *buf;
 
-    packet->length = COP2AVC_PACKET_SIZE;
-    packet->id = COP2AVC_PACKET_ID;
+	packet->length = COP2AVC_PACKET_SIZE;
+	packet->id = COP2AVC_PACKET_ID;
 
-    buf = (unsigned char *)packet;
+	buf = (unsigned char *)packet;
 
-    crc16 = make_crc16(buf, COP2AVC_PACKET_SIZE-2);
+	crc16 = make_crc16(buf, COP2AVC_PACKET_SIZE-2);
+
+    packet->crc16 = crc16;
+}
+static void ctm2avc_packet_last_fill(packet_CTM2AVC_SW_UPDATE_t *packet, unsigned short status)
+{
+    unsigned short crc16;
+    unsigned char *buf;
+
+    packet->length = CTM2AVC_SWUP_PACKET_SIZE;
+    packet->id = CTM2AVC_SWUP_PACKET_ID;
+
+	buf = (unsigned char *)packet;
+
+    crc16 = make_crc16(buf, CTM2AVC_SWUP_PACKET_SIZE-2);
+
+	
     packet->crc16 = crc16;
 }
 
@@ -109,7 +141,7 @@ int send_cop2avc_cmd_in_door_start_request(COP_Cur_Status_t __broadcast_status)
 
     ret = send_tcp_data_to_avc((char *)&cop2avc_packet, COP2AVC_PACKET_SIZE);
 
-print_cop2avc_packet(&cop2avc_packet);
+	print_cop2avc_packet(&cop2avc_packet);
 
     return ret;
 }
@@ -731,6 +763,105 @@ int send_cop2avc_cmd_set_special_route_request(COP_Cur_Status_t __broadcast_stat
     return ret;
 }
 
+
+/**********CTM FUNTION *******************************************************/
+int send_cop2avc_cmd_sw_version_request(char SWversion[], char add4,char add3,char add2,char add1)
+{
+	int ret = 0;
+	packet_CTM2AVC_SW_UPDATE_t cop2avc_packet;
+
+	memset(&cop2avc_packet, 0, sizeof(packet_CTM2AVC_SW_UPDATE_t));
+	cop2avc_packet.sw_version[0] = SWversion[0];
+	cop2avc_packet.sw_version[1] = SWversion[1];
+	
+	cop2avc_packet.SwUpdate_flag.SWversion_reqeust = 1;
+	cop2avc_packet.DeviceAddr4 = add4;
+	cop2avc_packet.DeviceAddr3 = add3; 
+	cop2avc_packet.DeviceAddr2 = add2;
+	cop2avc_packet.DeviceAddr1 = add1; 
+	
+	
+	ctm2avc_packet_last_fill(&cop2avc_packet, 0);
+
+    ret = send_tcp_data_to_avc((char *)&cop2avc_packet, CTM2AVC_SWUP_PACKET_SIZE);
+    print_ctm2avc_packet(&cop2avc_packet);
+
+    return ret;
+}
+
+int send_cop2avc_cmd_sw_update_start(short SWversion, char add4,char add3,char add2,char add1,int DeviceId)
+{
+	int ret = 0;
+	packet_CTM2AVC_SW_UPDATE_t cop2avc_packet;
+
+	memset(&cop2avc_packet, 0, sizeof(packet_CTM2AVC_SW_UPDATE_t));
+    cop2avc_packet.sw_version[0] = SWversion>>8;
+    cop2avc_packet.sw_version[1] = SWversion&0x00ff;
+	
+	cop2avc_packet.SwUpdate_flag.SWUpdateStart = 1;
+	cop2avc_packet.DeviceAddr4 = add4;
+	cop2avc_packet.DeviceAddr3 = add3; 
+	cop2avc_packet.DeviceAddr2 = add2;
+	cop2avc_packet.DeviceAddr1 = add1; 
+    printf("jhlee sw_version %d.%d \r\n", cop2avc_packet.sw_version[0], cop2avc_packet.sw_version[1] );
+    switch(DeviceId) {
+        case PIB:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/pib__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case SCAM:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/scam__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case FCAM:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/fcam__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case COP:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/cop__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case PAMP:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/pamp__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case PEI:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/pei__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case LRM:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/lrm__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case PID:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/pid__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case DIF:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/dif__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        case NVR:
+            sprintf(cop2avc_packet.UpFilename,"/sw_update/nvr__firmware_update_image.bin");
+            printf("jhlee %s \r\n",cop2avc_packet.UpFilename );
+            break;
+        default :
+            /*NULL */
+            break;
+
+    }
+	
+	ctm2avc_packet_last_fill(&cop2avc_packet, 0);
+
+    ret = send_tcp_data_to_avc((char *)&cop2avc_packet, CTM2AVC_SWUP_PACKET_SIZE);
+    print_ctm2avc_packet(&cop2avc_packet);
+    printf("\n31.MMI to AVC(update)\n");
+
+
+    return ret;
+}
+
+
 /*****************************************************************************/
 
 int send_all2avc_cycle_data(char *buf, int maxlen, unsigned short errcode, int errset, int errclear)
@@ -844,3 +975,46 @@ static void print_cop2avc_packet(packet_COP2AVC_t *packet)
     printf("-------------------------------------------------\n");
 }
 
+static void print_ctm2avc_packet(packet_CTM2AVC_SW_UPDATE_t *packet)
+{
+    unsigned char *buf;
+    int i= 0;  
+
+    buf = (unsigned char *)packet;
+    printf("\n======= COP(MMI)->AVC [%d(0x%02X) 0x%02X] =======>>>\n", buf[0],buf[0], buf[1]);
+
+    
+	printf("sw_version: %d.%d\n", buf[2],buf[3]);
+	switch (buf[4]) {
+		case 0x01: printf("SWFileReady   \n"); break;
+		case 0x02: printf("SWFileCompelte\n"); break;
+		case 0x10: printf("SWversion_reqeust\n"); break;
+		case 0x20: printf("SWUpdateStart    \n"); break;
+	}
+	
+	if(buf[5]) {
+		printf("processClass %d \n");
+	}
+	
+    printf("device ID %d %d %d %d \n",buf[10],buf[9],buf[8],buf[7]);
+	if(buf[11]) {
+		for(i =0;i<64;i++)
+		printf("%c",buf[i+11]);
+		printf("\n");
+	}
+	
+	switch (buf[75] ) {
+		case 0x01: printf("FtpOK    \n"); break;
+		case 0x02: printf("FtpError \n"); break;
+		case 0x04: printf("fileDownOK \n"); break;
+		case 0x08: printf("fileDownError\n"); break;
+	}
+	
+	switch (buf[76] ) {
+		case 0x01: printf("AckUpdateOK    \n"); break;
+		case 0x02: printf("AckUpdateError \n"); break;		
+	}	
+	
+	printf("CRC %02X %02X \n",buf[79],buf[80]);
+    printf("-------------------------------------------------\n");
+}

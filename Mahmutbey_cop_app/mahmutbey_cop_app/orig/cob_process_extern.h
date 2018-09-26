@@ -1,6 +1,7 @@
 #ifndef __COP_KEY_PROCESS_EXTERN_H__
 #define __COP_KEY_PROCESS_EXTERN_H__
 
+#if 0
 /************* COP to AVC Packet ********************/
 typedef struct {
     char start	:1;
@@ -247,7 +248,98 @@ typedef struct {
     unsigned short crc16;
 } __attribute__((packed)) packet_AVC2COP_t;
 /******************************************************************************/
+/******************************************************************************/
+#endif
+#if 0
+/************* AVC to CTM(COP)Packet ********************/
+typedef struct {
+    char AVC	:1;
+    char CTM	:1;
+    char COP	:1;
+    char FDI    :1;
+    char PIB_1	:1;
+    char PIB_2	:1;
+    char SDI_1	:1;
+    char SDI_2  :1;	
+} __attribute__((packed)) SubSystem_StatusFlag1_t;
+typedef struct {
+    char PEI_1	 :1;
+    char PEI_2	 :1;
+    char PEI_3	 :1;
+    char PEI_4   :1;
+    char PAMP_1	 :1;
+    char PAMP_2	 :1;
+    char reserved:2;    	
+} __attribute__((packed)) SubSystem_StatusFlag2_t;
+typedef struct {
+    char LRM_1	:1;
+    char LRM_2	:1;
+    char LRM_3	:1;
+    char LRM_4  :1;
+    char LRM_5	:1;
+    char LRM_6	:1;
+    char LRM_7	:1;
+    char LRM_8  :1;	
+} __attribute__((packed)) SubSystem_StatusFlag3_t;
+typedef struct {
+    char FCAM	 :1; 
+    char OCAM_1	 :1;
+    char OCAM_2	 :1;
+    char SCAM_1  :1;
+    char SCAM_2	 :1;
+    char SCAM_3	 :1;
+    char SCAM_4  :1;    	
+    char reserved:1;    	
+} __attribute__((packed)) SubSystem_StatusFlag4_t;
 
+typedef struct {
+    char PID_1	:1;
+    char PID_2	:1;
+    char PID_3	:1;
+    char PID_4	:1;
+    char PID_5	:1;
+    char PID_6	:1;
+    char PID_7	:1;
+    char PID_8	:1;
+} __attribute__((packed)) SubSystem_StatusFlag5_t;
+typedef struct {
+    char PID_9	 :1;
+    char PID_10	 :1;
+    char PID_11	 :1;
+    char PID_12	 :1;
+    char reserved:4;    	
+} __attribute__((packed)) SubSystem_StatusFlag6_t;
+
+typedef struct {
+    SubSystem_StatusFlag1_t MC_status1;
+    SubSystem_StatusFlag2_t MC_status2;
+    SubSystem_StatusFlag3_t MC_status3;
+    SubSystem_StatusFlag4_t MC_status4;
+    SubSystem_StatusFlag5_t MC_status5;
+    SubSystem_StatusFlag6_t MC_status6;
+} __attribute__((packed)) SubSystem_Status_t;
+
+
+#define AVC2CTM_PACKET_SIZE	53
+#define AVC2CTM_PACKET_ID	0x11
+typedef struct {
+    char length;	/* 35h */
+    char id;		/* 11h */
+    SubSystem_Status_t Single_MC2_status;
+    SubSystem_Status_t Single_M_status;
+    SubSystem_Status_t Single_T_status;
+    SubSystem_Status_t Single_MC1_status;
+    SubSystem_Status_t Dual_MC2_status;
+    SubSystem_Status_t Dual_M_status;
+    SubSystem_Status_t Dual_T_status;
+    SubSystem_Status_t Dual_MC1_status;
+    char spare;
+    unsigned short crc16;
+} __attribute__((packed)) packet_AVC2CTM_t;
+/******************************************************************************/
+#endif 
+
+#if 0
 struct call_info {
     char car_id;
     char idx_id;
@@ -265,7 +357,7 @@ struct multi_call_status {
     int out_ptr;
     struct call_info info[MAX_PEI_CALL_NUM];
 };
-
+#endif 
 #define FUNC_IN_OFFSET              0
 #define FUNC_OUT_OFFSET             1
 #define FUNC_LRM_OFFSET             2

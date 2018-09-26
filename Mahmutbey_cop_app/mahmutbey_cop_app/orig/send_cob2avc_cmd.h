@@ -52,5 +52,6 @@ int send_cop2avc_cmd_set_special_route_request(COP_Cur_Status_t __broadcast_stat
 void update_inout_key_status(int whaton, char *where);
 
 int send_all2avc_cycle_data(char *buf, int maxlen, unsigned short errcode, int errset, int errclear);
-
+int send_cop2avc_cmd_sw_version_request(char SWversion[], char add4,char add3,char add2,char add1);
+int send_cop2avc_cmd_sw_update_start(short SWversion, char add4,char add3,char add2,char add1,int DeviceId);
 #endif  //__SEND_COP2AVC_CMD_H__

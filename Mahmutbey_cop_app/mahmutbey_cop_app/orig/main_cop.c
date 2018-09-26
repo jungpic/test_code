@@ -28,10 +28,9 @@
 #include "version.h"
 #include "cob_system_error.h"
 #include "software_update.h"
-
 #include "ftpget.h"
-
 #include "debug_multicast.h"
+#include "usb_update.h"
 
 #define LOG_AVC_NOT_CONNECT 0
 #define LOG_READY           1
@@ -134,6 +133,9 @@ static int watchdog_onoff_enable;
 
 extern int LcdLogIndex;
 
+extern packet_AVC2CTM_t avc2ctm_packet; /*ctm function add */
+extern char AVC2CTM_msg[53];
+
 #define LINUX_CARRIER_PROC_FILE	"/sys/class/net/eth0/carrier"
 #define LINK_DETECT_START	1
 #define LINK_UP_FIRST		2
@@ -149,6 +151,9 @@ int get_pid_udhcpc(void);
 static int cur_link_status, old_cur_link_status;
 
 static int avc_ip_fixed;
+
+int iDetectFlag = 0; /* USB insert flag*/
+
 
 void gpio_watchdog_disable_start_watchdog_by_kernel_trigger(void)
 {
@@ -322,6 +327,36 @@ void force_reboot(void)
      system("reboot");
 }
 
+
+int USBManageModule(void)
+{
+    int iRet = 0;    
+    SUSBStatus Parameter;
+    //static int iDetectFlag = 0;
+    static int iRead_cnt = 0;
+	
+	if(iDetectFlag == 0)
+	{
+		iRet = DetectUSB(&Parameter);
+		if(iRet >= 0)
+		{			
+			iDetectFlag = 1;
+			printf("iDetectFlag %d \r\n",iDetectFlag);			
+        }
+		
+    }
+	else
+	{
+		iRet = CheckUSBRemove(&Parameter); 
+		if(iRet >= 0)
+		{			
+			iDetectFlag = 0;
+			printf("iDetectFlag %d \r\n",iDetectFlag);
+		} 
+	}
+    return iRet;
+}
+
 int main_call(int arg1, int arg2)
 {
     int i, ret, len = 0, process_len = 0, cmd_len = 0;//, ret_len = 0;
@@ -356,7 +391,7 @@ int main_call(int arg1, int arg2)
 
     watchdog_onoff_enable = 0;
     dhcp_use_enable = 0;
-
+#if 1  //jhlee
     if (arg1)
         watchdog_onoff_enable = 1;
     else
@@ -366,7 +401,7 @@ int main_call(int arg1, int arg2)
         dhcp_use_enable = 1;
     else
         dhcp_use_enable = 0;
-
+#endif 
     // 2014/02/25
     phy_reset_low();
     usleep(10000);
@@ -382,8 +417,10 @@ int main_call(int arg1, int arg2)
     set_app_version(Entire_Version);
 
     print_program_start_message();
-
-    ret = key_init();
+	
+	init_subsystem_status();
+    
+	ret = key_init();
 
     ret = audio_init();
 #if 0
@@ -504,10 +541,12 @@ int main_call(int arg1, int arg2)
 #endif
     }
 
+#if 0	//test jhlee
     (void)signal(SIGINT, exit_program);
     (void)signal(SIGTERM, exit_program);
-
+#endif 
     app_init();
+	init_UsbSwVer();
 
 #if 0
 /* KEY TEST */
@@ -888,6 +927,25 @@ while (1)
                         }
                         /***********************************************************/
                         break;
+						
+                    case AVC_TCP_CMD_COP_STATUS_ID:						
+                        /* sub system status */
+                        //print_avc_to_ctm_packet(&RxBuf[process_len], cmd_len);                        
+						/*make update status function*/
+						sub_system_status_update(&RxBuf[process_len], cmd_len);                        
+						break;
+
+                    case AVC_TCP_CMD_SUB_SW_UPDATE_ID:
+                        /* sub system sw version information */
+                        print_avc_to_ctm_sw_update_packet(&RxBuf[process_len], cmd_len);
+						sub_system_sw_update(&RxBuf[process_len], cmd_len);
+						break;
+
+                    case AVC2CTM_EVENT_PACKET_ID:
+                        /*AVC log download */
+                        print_avc_to_ctm_event_packet(&RxBuf[process_len], cmd_len);
+                        avc_ctm_event_msg_update(&RxBuf[process_len], cmd_len);
+                        break;
 
                     default:
                         printf("<< Not Defined CMD: 0x%X\n >>", avc_tcp_cmd);
@@ -1017,6 +1075,12 @@ while (1)
                     break;
                 }
 	    	}
+			
+			
+//jhlee, 180822 CTM Funtion add			
+			
+			USBManageModule();
+			
         }
 
 
@@ -1080,7 +1144,7 @@ while (1)
     raise(SIGSEGV);
 
     return 0;
-}
+}/*end main_call*/
 
 void ignore_avc_server_to_wait_another_server(void)
 {
@@ -1235,7 +1299,7 @@ static void app_init(void)
     avc_srv_ip_addr = 0;
     done_avc_tcp_connected = 0;
 	b_received_first_cmd_from_avc = 0;
-    enable_reconnect_avc_tcp = 0;
+    enable_reconnect_avc_tcp = 0;	
 }
 
 static void app_exit(void)

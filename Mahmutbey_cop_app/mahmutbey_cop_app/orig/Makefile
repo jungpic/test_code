@@ -35,7 +35,9 @@ OBJS = main.o \
        flash_erase.o \
        get_pid_by_name.o \
 	   func_db_update.o \
-	   g711.o
+	   g711.o \ 
+	   StrLib.o usb_update.o \
+	   
 
        #silence_mp3_rtp.o
 

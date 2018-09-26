@@ -118,6 +118,7 @@ COP_Cur_Status_t __2nd_broadcast_status;
 static COP_Cur_Status_t __old_broadcast_status;
 static COP_Cur_Status_t __2nd_old_broadcast_status;
 
+
 #define STOP_LIMIT_PACKET_N	5
 
 long cal_clock_delay(struct timespec *old_t, struct timespec *cur_t);

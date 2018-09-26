@@ -60,6 +60,15 @@ int send_tcp_data_to_avc(char *buf, int len);
 unsigned char my_ip_value[4];
 static unsigned char my_mask_value[4];
 
+packet_AVC2CTM_t avc2ctm_packet; //add ctm function
+packet_AVC2CTM_SW_UPDATE_t avc2ctm_sw_up_packet; /*ctm sw update packet */
+packet_AVC2CTM_EVENT_t  avc2ctm_log_event_packet; /*ctm sw log event packet */
+SubDevice_t g_SubDevice[150];  //mc1, m ,t, mc2 중 mc1,m 차량 subdeivce 만 업데이트한다. 
+char AVC2CTM_msg[53];
+char avc_status;
+char AVC_ScheduleTime[19];
+
+
 /*
 #define DI_ERROR_DRIVER_SW_ERR		1
 #define DI_ERROR_DRIVER_HW_ERR		2
@@ -505,7 +514,7 @@ Retry:
         }
     }
 
-#if 1
+#if 0
     if (ret > 0) {
 		int i, k;
 		printf("\n");
@@ -532,8 +541,9 @@ Retry:
         printf("--------------------------------\n");
     }
 #else
-    if (ret > 0)
+    if (ret > 0){
         print_avc_to_cop_packet(buf, ret);
+	}
 #endif
 
 	if( internal_test_use && (ret > 0) ) {
@@ -571,14 +581,20 @@ void print_avc_to_cop_packet(char *buf, int len)
     int i, n, active = 0;
 
     n = 0;
-    if (buf[1] != 5) {
-        printf("------- TCP READ ----------------------------");
-        for (i = 0; i < len; i++) {
-            if ((i % 16) == 0)
-                printf("\n");
-            printf("%02X ", buf[i]);
-        }
-        printf("\n---------------------------------------------\n\n");
+//    if (buf[1] != 5 ) {
+//        if(buf[1] != 0x11){
+//            printf("------- TCP READ ----------------------------");
+//            for (i = 0; i < len; i++) {
+//                if ((i % 16) == 0)
+//                    printf("\n");
+//                printf("%02X ", buf[i]);
+//            }
+//            printf("\n---------------------------------------------\n\n");
+//        return;
+//        }
+//    }
+
+    if (buf[1] != 5 ) {
         return;
     }
 
@@ -687,7 +703,588 @@ void print_avc_to_cop_packet(char *buf, int len)
         n += AVC2COP_PACKET_SIZE;
     }
 }
+/* system status report from AVC */
+void print_avc_to_ctm_packet(char *buf, int len)
+{
+    int i, n, cnt = 0;
+	int cnt1 = 0;
+    n = 0;
+	
+    if (buf[1] != 0x11) {
+        printf("------- TCP READ AVC2CTM SUB DEV STATUS----------------------------");
+        for (i = 0; i < len; i++) {
+            if ((i % 16) == 0)
+                printf("\n");
+            printf("%02X ", buf[i]);
+        }
+        printf("\n---------------------------------------------\n\n");
+        return;
+    }
 
+    while (n < len) {
+        printf("\n----------- AVC->CTM(%03d) --------------------------------", __broadcast_status);
+			for(cnt1 =0 ;cnt1<4;cnt1++) {
+				if(cnt1 == 0) {
+                    printf("\r\n===Single MC1=== \r\n");
+					i = 0;
+				}
+				if(cnt1 == 1) {
+                    printf("\r\n===Single MC2=== \r\n");
+					i = 18;
+				}
+				if(cnt1 == 2) {
+                    printf("\r\n===Dual MC1=== \r\n");
+					i = 24;
+				}
+				if(cnt1 == 3) {
+                    printf("\r\n===Dual MC2=== \r\n");
+					i = 42;
+				}
+				if (buf[2+i]) {
+					if(buf[2+i] & 0x01) printf("AVC FAULT \r\n");
+                    if(buf[2+i] & 0x02) printf("NVR FAULT \r\n");
+					if(buf[2+i] & 0x04) printf("COP FAULT \r\n");
+					if(buf[2+i] & 0x08) printf("FDI FAULT \r\n");
+					if(buf[2+i] & 0x10) printf("PIB1 FAULT \r\n");
+                    //if(buf[2+i] & 0x20) printf("PIB2 FAULT \r\n");
+                    //if(buf[2+i] & 0x40) printf("SDI1 FAULT \r\n");
+                    //if(buf[2+i] & 0x80) printf("SDI2 FAULT \r\n");
+				}
+				if (buf[3+i]){
+					if(buf[3+i] & 0x01) printf("PEI1 FAULT \r\n");
+					if(buf[3+i] & 0x02) printf("PEI2 FAULT \r\n");
+					if(buf[3+i] & 0x04) printf("PEI3 FAULT \r\n");
+					if(buf[3+i] & 0x08) printf("PEI4 FAULT \r\n");
+					if(buf[3+i] & 0x10) printf("PAMP1 FAULT \r\n");
+					if(buf[3+i] & 0x20) printf("PAMP2 FAULT \r\n");				
+				}
+				if (buf[4+i]){
+					if(buf[4+i] & 0x01) printf("LRM1 FAULT \r\n");
+					if(buf[4+i] & 0x02) printf("LRM2 FAULT \r\n");
+					if(buf[4+i] & 0x04) printf("LRM3 FAULT \r\n");
+					if(buf[4+i] & 0x08) printf("LRM4 FAULT \r\n");
+					if(buf[4+i] & 0x10) printf("LRM5 FAULT \r\n");
+					if(buf[4+i] & 0x20) printf("LRM6 FAULT \r\n");				
+					if(buf[4+i] & 0x40) printf("LRM7 FAULT \r\n");
+					if(buf[4+i] & 0x80) printf("LRM8 FAULT \r\n");								
+				}
+				if (buf[5+i]){
+					if(buf[5+i] & 0x01) printf("FCAM FAULT \r\n");
+                    //if(buf[5+i] & 0x02) printf("OCAM1 FAULT \r\n");
+                    //if(buf[5+i] & 0x04) printf("OCAM2 FAULT \r\n");
+					if(buf[5+i] & 0x08) printf("SCAM1 FAULT \r\n");
+					if(buf[5+i] & 0x10) printf("SCAM2 FAULT \r\n");
+					if(buf[5+i] & 0x20) printf("SCAM3 FAULT \r\n");				
+					if(buf[5+i] & 0x40) printf("SCAM4 FAULT \r\n");				
+				}
+				if (buf[6+i]){
+					if(buf[6+i] & 0x01) printf("PID1 FAULT \r\n");
+					if(buf[6+i] & 0x02) printf("PID2 FAULT \r\n");
+					if(buf[6+i] & 0x04) printf("PID3 FAULT \r\n");
+					if(buf[6+i] & 0x08) printf("PID4 FAULT \r\n");
+					if(buf[6+i] & 0x10) printf("PID5 FAULT \r\n");
+					if(buf[6+i] & 0x20) printf("PID6 FAULT \r\n");				
+					if(buf[6+i] & 0x40) printf("PID7 FAULT \r\n");
+					if(buf[6+i] & 0x80) printf("PID8 FAULT \r\n");								
+				}
+				if (buf[7+i]){
+					if(buf[7+i] & 0x01) printf("PID9 FAULT \r\n");
+					if(buf[7+i] & 0x02) printf("PID10 FAULT \r\n");
+					if(buf[7+i] & 0x04) printf("PID11 FAULT \r\n");
+					if(buf[7+i] & 0x08) printf("PID12 FAULT \r\n");
+				}
+			}
+			for(cnt =0 ;cnt<4;cnt++) {
+				if(cnt ==0) {
+                    printf("===Single T CAR=== \r\n");
+					i = 0;
+				}
+				if(cnt ==1) {
+                    printf("===Single M CAR=== \r\n");
+					i = 6;
+				}
+				if(cnt ==2) {
+                    printf("===Dual T CAR=== \r\n");
+					i = 24;
+				}
+				if(cnt ==3) {
+                    printf("===Dual M CAR=== \r\n");
+					i = 30;
+				}				
+				if (buf[8+i]) {					                
+				if(buf[8+i] & 0x10) printf("PIB1 FAULT \r\n");
+				if(buf[8+i] & 0x20) printf("PIB2 FAULT \r\n");
+                //if(buf[8+i] & 0x40) printf("SDI1 FAULT \r\n");
+                //if(buf[8+i] & 0x80) printf("SDI2 FAULT \r\n");
+				}
+				if (buf[9+i]){
+					if(buf[9+i] & 0x01) printf("PEI1 FAULT \r\n");
+					if(buf[9+i] & 0x02) printf("PEI2 FAULT \r\n");
+					if(buf[9+i] & 0x04) printf("PEI3 FAULT \r\n");
+					if(buf[9+i] & 0x08) printf("PEI4 FAULT \r\n");
+					if(buf[9+i] & 0x10) printf("PAMP1 FAULT \r\n");
+					if(buf[9+i] & 0x20) printf("PAMP2 FAULT \r\n");				
+				}
+				if (buf[10+i]){
+					if(buf[10+i] & 0x01) printf("LRM1 FAULT \r\n");
+					if(buf[10+i] & 0x02) printf("LRM2 FAULT \r\n");
+					if(buf[10+i] & 0x04) printf("LRM3 FAULT \r\n");
+					if(buf[10+i] & 0x08) printf("LRM4 FAULT \r\n");
+					if(buf[10+i] & 0x10) printf("LRM5 FAULT \r\n");
+					if(buf[10+i] & 0x20) printf("LRM6 FAULT \r\n");				
+					if(buf[10+i] & 0x40) printf("LRM7 FAULT \r\n");
+					if(buf[10+i] & 0x80) printf("LRM8 FAULT \r\n");								
+				}
+				if (buf[11+i]){				
+					if(buf[11+i] & 0x08) printf("SCAM1 FAULT \r\n");
+					if(buf[11+i] & 0x10) printf("SCAM2 FAULT \r\n");
+					if(buf[11+i] & 0x20) printf("SCAM3 FAULT \r\n");				
+					if(buf[11+i] & 0x40) printf("SCAM4 FAULT \r\n");				
+				}
+				if (buf[12+i]){
+					if(buf[12+i] & 0x01) printf("PID1 FAULT \r\n");
+					if(buf[12+i] & 0x02) printf("PID2 FAULT \r\n");
+					if(buf[12+i] & 0x04) printf("PID3 FAULT \r\n");
+					if(buf[12+i] & 0x08) printf("PID4 FAULT \r\n");
+					if(buf[12+i] & 0x10) printf("PID5 FAULT \r\n");
+					if(buf[12+i] & 0x20) printf("PID6 FAULT \r\n");				
+					if(buf[12+i] & 0x40) printf("PID7 FAULT \r\n");
+					if(buf[12+i] & 0x80) printf("PID8 FAULT \r\n");								
+				}
+				if (buf[13+i]){
+					if(buf[13+i] & 0x01) printf("PID9 FAULT \r\n");
+					if(buf[13+i] & 0x02) printf("PID10 FAULT \r\n");
+					if(buf[13+i] & 0x04) printf("PID11 FAULT \r\n");
+					if(buf[13+i] & 0x08) printf("PID12 FAULT \r\n");
+				}
+			}
+			
+			
+        printf("\n----------------------------------------------------------\n");
+
+        n += AVC2CTM_PACKET_SIZE;
+    }
+}
+
+void print_avc_to_ctm_sw_update_packet(char *buf, int len)
+{
+    int i, n, cnt = 0;
+	int cnt1 = 0;
+    n = 0;
+	
+    if (buf[1] != 0x30) {
+//        printf("------- TCP READ AVC2CTM_SW_UPDATE----------------------------");
+//        for (i = 0; i < len; i++) {
+//            if ((i % 16) == 0)
+//                printf("\n");
+//            printf("%02X ", buf[i]);
+//        }
+//        printf("\n---------------------------------------------\n\n");
+        return;
+    }
+
+    while (n < len) {
+        printf("------- TCP READ AVC2CTM_SW_UPDATE----------------------------");
+        printf("\n30.AVC to MMI (UPDATE)--- AVC->CTM(%03d)   -------------\r\n", __broadcast_status);
+		printf("SW version %d,%d \r\n",buf[n+2],buf[n+3]);
+		switch (buf[n+4]) {
+			case 0x1: printf("FTP Connection OK"); break;
+			case 0x2: printf("FTP Connection ERROR"); break;
+			case 0x4: printf("FILE DOWN OK"); break;
+			case 0x8: printf("FILE DOWN ERROR"); break;			
+			default: if (buf[n+4]) printf("FTP STATUS ?: 0x%02X ", buf[n+4]); break;
+		}
+		switch (buf[n+5]) {
+			case 0x1: printf("UpDate OK"); break;
+			case 0x2: printf("Update ERROR"); break;
+			case 0x4: printf("RE-booting"); break;
+			case 0x8: printf("RE-booting complete"); break;						
+			default: 				
+					if (buf[n+5]){
+						if(buf[n+5] & 0x10) printf("No Error OK\r\n");
+						if(buf[n+5] & 0x20) printf("Errors \r\n");
+						if(buf[n+5] & 0x40) printf("Errors \r\n");
+						if(buf[n+5] & 0x80) printf("Errors \r\n");
+					}
+					break;			
+		}		
+		switch (buf[n+6]) {
+			case 1: printf("avc_yenikapi \r\n"); break;
+			case 2: printf("avc_aengine \r\n"); break;
+			case 3: printf("avc_fengine \r\n"); break;
+			case 4: printf("avc_cengine \r\n"); break;
+			case 5: printf("avc_rengine \r\n"); break;
+			case 6: printf("avc_sengine \r\n"); break;
+			case 7: printf("avc_vengine \r\n"); break;					
+			case 8: printf("avc_libavc \r\n"); break;			
+			default: if (buf[n+6]) printf("avc process ?: 0x%02X ", buf[n+6]); break;
+		}
+		if (buf[n+8] || buf[n+9] || buf[n+10] || buf[n+11])
+				printf("\nDevice ID: %d.%d.%d.%d ", buf[n+8], buf[n+9], buf[n+10], buf[n+11]);
+			
+		switch (buf[n+12]) {
+			case 0x1: printf("ACK S/W update file upload ready \r\n"); break;
+			case 0x2: printf("ACK S/W update file upload complete \r\n"); break;						
+			case 0x10: printf("ACK S/W Version Reqeust \r\n"); break;					
+			case 0x20: printf("ACK S/W Update Start \r\n"); break;			
+			default: if (buf[n+12]) printf("ACK ?: 0x%02X ", buf[n+12]); break;
+		}			
+			
+        printf("\n----------------------------------------------------------\n");
+
+        n += AVC2CTM_PACKET_SIZE;
+    }
+}
+/* AVC to COP(MMI) event packet */
+/* frame length 45 (0x2dh) */
+void print_avc_to_ctm_event_packet(char *buf, int len)
+{
+    int i, n, cnt = 0;
+    int cnt1 = 0;
+    n = 0;
+
+    if (buf[1] == 0x10) {
+#if 1
+        printf("------- TCP READ AVC2COP(MMI)_EVENT_PACKET--------");
+        for (i = 0; i < len; i++) {
+            if ((i % 16) == 0)
+                printf("\n");
+            printf("%02X ", buf[i]);
+        }
+        printf("\n---------------------------------------------\n\n");
+#endif
+     //   return;
+    }
+
+    while (n < len) {
+        printf("------- TCP READ AVC2COP(MMI)_EVENT_PACKET--------");
+        printf("\n----------- AVC->COP(MMI)(%03d) -----------\r\n", __broadcast_status);
+
+        switch (buf[n+11]) {
+            case 0x4: printf("LOG DOWNLOAD START"); break;
+            case 0x80: printf("LOG DOWNLOAD VALID"); break;
+            default: if (buf[n+11]) printf("LOG DOWNLOAD STATUS ?: 0x%02X ", buf[n+11]); break;
+        }
+
+        if (buf[n+14] || buf[n+15] || buf[n+16] || buf[n+17] || buf[n+18] || buf[n+19]){
+                setup_avc_schedule_time(&buf[n+14]);
+        }
+
+
+        switch (buf[n+21]) {
+            case 0x01: printf("Single TS"); break;
+            case 0x02: printf("Dual TS"); break;
+            case 0x04: printf("Direct"); break;
+            case 0x08: printf("Reverse"); break;
+            case 0x80: printf("Valid"); break;
+            default: if (buf[n+21]) printf("Dual TS STATUS ?: 0x%02X ", buf[n+21]); break;
+        }
+
+        printf("\n----------------------------------------------------------\n");
+
+        n += AVC2CTM_EVENT_PACKET_SIZE;
+    }
+}
+
+
+int setup_avc_schedule_time(char *buf)
+{
+    int sec, min, hour, mday, mon, year;
+    int ret = 0;
+
+    year = bcd2bin(buf[0]) + bcd2bin(buf[1]) * 100;
+    mon = bcd2bin(buf[2]);
+    mday = bcd2bin(buf[3]);
+    hour = bcd2bin(buf[4]);
+    min = bcd2bin(buf[5]);
+    sec = bcd2bin(buf[6]);
+
+#if 1
+    printf("< Schedule TIME: %d-%d-%d %d:%d:%d >\n", year, mon, mday, hour, min, sec);
+#endif
+    if(year<0 || mon > 12 || mday>31 || hour >24 || min >60 || sec >60 )
+            ret = -1;
+    sprintf(&AVC_ScheduleTime[0],"%d-%d-%d %d:%d:%d",year,mon,mday,hour,min,sec);
+    return ret;
+}
+void debug_avc2ctm_packet(void)
+{
+	printf("***********************\r\n");
+	printf("%s()\r\n",__func__);
+	printf("***********************\r\n");
+		//check sub device status 
+	printf("avc status %d \r\n",
+	avc2ctm_packet.Single_MC2_status.MC_status1.AVC);	
+	//avc2ctm_packet->Single_MC2_status.MC_status1.AVC);
+	
+	//avc_status = avc2ctm_packet->Single_MC2_status.MC_status1.AVC;
+	printf("avc2ctm_packet->Single_MC2_status.MC_status1 %02x\r\n",avc2ctm_packet.Single_MC2_status.MC_status1);
+	
+}
+int init_subsystem_status (void)
+{
+	int dev_cnt = 0,dev_num = 0;
+	int c_class = 0, d_class = 0;
+	
+	/*PIB*/
+	for(dev_cnt = 0; dev_cnt <8 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt/2;
+		d_class = dev_cnt%2;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 129+d_class;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("PIB %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}
+		
+	/*SCAM*/	
+	for(dev_cnt = 0; dev_cnt <16 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt/4;
+		d_class = dev_cnt%4;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 177+d_class;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("SCAM %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}
+	
+	/*FCAM*/	
+	for(dev_cnt = 0; dev_cnt <2 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt*3;
+		//d_class = dev_cnt%2;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 145;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("FCAM %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}	
+	
+	/*COP*/
+	for(dev_cnt = 0; dev_cnt <2 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt*3;
+		//d_class = dev_cnt%2;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 65;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("COP %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}		
+	/*PAMP*/
+	for(dev_cnt = 0; dev_cnt <8 ;dev_cnt++) {
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt/2;
+		d_class = dev_cnt%2;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 97+d_class;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("PAMP %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}
+	/*PEI*/
+	for(dev_cnt = 0; dev_cnt <16 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt/4;
+		d_class = dev_cnt%4;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 113+d_class;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("PEI %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}	
+	/*LRM*/
+	for(dev_cnt = 0; dev_cnt <32 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt/8;
+		d_class = dev_cnt%8;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 81+d_class;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("LRM %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;	
+	}	
+	/*PID*/
+	for(dev_cnt = 0; dev_cnt <48 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt/12;
+		d_class = dev_cnt%12;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 161+d_class;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("PID %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}	
+	/*DIF*/
+	for(dev_cnt = 0; dev_cnt <2 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt*3;
+		//d_class = dev_cnt%2;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 209;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("DIF %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}
+
+	/*NVR*/
+	for(dev_cnt = 0; dev_cnt <2 ;dev_cnt++) {		
+		g_SubDevice[dev_num].DeviceAddr1 = 10;
+		g_SubDevice[dev_num].DeviceAddr2 = 128;
+		c_class = dev_cnt*3;
+		//d_class = dev_cnt%2;
+		g_SubDevice[dev_num].DeviceAddr3 = 9+c_class;
+		g_SubDevice[dev_num].DeviceAddr4 = 241;		
+		g_SubDevice[dev_num].SwCurVer = 0;
+		g_SubDevice[dev_num].SwUsbVer = 0;
+        printf("NVR %d IP %d.%d.%d.%d Current SW %d USB SW %d \r\n",dev_num,
+            g_SubDevice[dev_num].DeviceAddr1,g_SubDevice[dev_num].DeviceAddr2,
+            g_SubDevice[dev_num].DeviceAddr3,g_SubDevice[dev_num].DeviceAddr4,
+            g_SubDevice[dev_num].SwCurVer,g_SubDevice[dev_num].SwUsbVer);
+		dev_num++;
+	}	
+
+
+}
+int avc_ctm_event_msg_update (char *buf, int len)
+{
+    int ret = 0;
+
+    if (len == 0){
+        printf("%s(), size error got %d.\n", __func__, len);
+        return -1;
+    }
+    //packet_AVC2CTM_EVENT_t  avc2ctm_log_event_packet; /*ctm sw log event packet */
+    printf("len %d",len);
+    memcpy(&avc2ctm_log_event_packet, buf, len);
+
+    //setup_avc_schedule_time(buf[14]);
+
+    return ret ;
+
+}
+
+int sub_system_status_update (char *buf, int len)
+{
+    int ret = 0;
+
+    if (len == 0){
+        printf("%s(), size error got %d.\n", __func__, len);
+        return -1;
+    }
+    memcpy(&avc2ctm_packet, buf, len);
+    memcpy(&AVC2CTM_msg[0],buf,len);
+    return ret ;
+	
+}
+			
+int sub_system_sw_update (char *buf, int len)
+{
+    int ret = 0;
+	int dev_cnt = 0;
+	int dev_num = 0;
+
+    printf("%s(), size got %d.\n", __func__, len);
+
+    if (len == 0)
+        return -1;
+
+    if (len > sizeof(packet_AVC2CTM_SW_UPDATE_t)) {
+        printf("%s(), size error got %d.\n", __func__, len);
+     //   return -1;
+    }
+
+    memcpy(&avc2ctm_sw_up_packet, buf, len);
+    //memcpy(&AVC2CTM_msg[0],buf,len);
+    printf(" RECIVE IP  -----------> %d.%d.%d.%d \r\n",
+           avc2ctm_sw_up_packet.DeviceAddr4   , avc2ctm_sw_up_packet.DeviceAddr3,
+           avc2ctm_sw_up_packet.DeviceAddr2 , avc2ctm_sw_up_packet.DeviceAddr1  );
+    printf(" SW version %d.%d \r\n", avc2ctm_sw_up_packet.sw_version[0],
+            avc2ctm_sw_up_packet.sw_version[1] );
+
+//    g_SubDevice[dev_num].SwCurVer = avc2ctm_sw_up_packet.sw_version[0]<<8;
+//    g_SubDevice[dev_num].SwCurVer += avc2ctm_sw_up_packet.sw_version[1];
+//    printf(" Compare SW version %d.%d %d.%d \r\n",
+//    g_SubDevice[dev_num].SwCurVer>>8,g_SubDevice[dev_num].SwCurVer&0x00FF,
+//    avc2ctm_sw_up_packet.sw_version[0], avc2ctm_sw_up_packet.sw_version[1] );
+#if 1 //recieve ip valid check and sw version update
+	for(dev_num = 0;dev_num< 147;dev_num++) {
+		if((g_SubDevice[dev_num].DeviceAddr4 == avc2ctm_sw_up_packet.DeviceAddr4) && 
+		  (g_SubDevice[dev_num].DeviceAddr3 == avc2ctm_sw_up_packet.DeviceAddr3)) {
+
+            printf("jhlee RECIVE IP  -----------> %d.%d.%d.%d \r\n",
+                   avc2ctm_sw_up_packet.DeviceAddr1   , avc2ctm_sw_up_packet.DeviceAddr2,
+                   avc2ctm_sw_up_packet.DeviceAddr3 , avc2ctm_sw_up_packet.DeviceAddr4  );
+            printf(" SW version %d.%d \r\n",avc2ctm_sw_up_packet.sw_version[0],
+                    avc2ctm_sw_up_packet.sw_version[1] );
+
+            g_SubDevice[dev_num].SwCurVer = avc2ctm_sw_up_packet.sw_version[0]<<8;
+            g_SubDevice[dev_num].SwCurVer += avc2ctm_sw_up_packet.sw_version[1];
+            printf(" Compare SW version %d.%d %d.%d \r\n",
+            g_SubDevice[dev_num].SwCurVer>>8,g_SubDevice[dev_num].SwCurVer&0x00FF,
+            avc2ctm_sw_up_packet.sw_version[0], avc2ctm_sw_up_packet.sw_version[1] );
+
+            g_SubDevice[dev_num].Update_flag =avc2ctm_sw_up_packet.Update_flag;
+            printf("avc2ctm_sw_up_packet.Update_flag %d \r\n",avc2ctm_sw_up_packet.Update_flag);
+            g_SubDevice[dev_num].Ftpflag =avc2ctm_sw_up_packet.ftp_flag;
+            printf("avc2ctm_sw_up_packet.Ftpflag %d \r\n",avc2ctm_sw_up_packet.ftp_flag);
+        }
+
+    }
+#endif 	
+
+
+    return ret ;
+}			
+			
+			
 int process_avc_tcp_data(char *buf, int len, int *avc_cmd_id)
 {
     unsigned char cmd, req = 0;
@@ -728,7 +1325,24 @@ int process_avc_tcp_data(char *buf, int len, int *avc_cmd_id)
                 cmd_id = AVC_TCP_CMD_COP_CTRL_ID;
             }
             break;
+        case AVC_TCP_CMD_COP_STATUS_ID:
+            if (len >= frame_len) {
 
+                cmd_id = AVC_TCP_CMD_COP_STATUS_ID;
+            }
+            break;
+        case AVC_TCP_CMD_SUB_SW_UPDATE_ID:
+            if (len >= frame_len) {
+
+                cmd_id = AVC_TCP_CMD_SUB_SW_UPDATE_ID;
+            }
+            break;
+        case AVC2CTM_EVENT_PACKET_ID:
+            if (len >= frame_len) {
+
+                cmd_id = AVC2CTM_EVENT_PACKET_ID;
+            }
+            break;
         default:
             printf("< AVC CMD CODE: unknow(%02X) >\n", cmd);
             frame_len = -1;
@@ -797,7 +1411,35 @@ int send_tcp_data_to_avc(char *txbuf, int txlen)
     //timeout.tv_usec = 1000;
     timeout.tv_usec = 50;
     ret = select(numFds, NULL/*&rset*/, &wset, NULL, &timeout);
+#if 0
+    //if(txlen > 8){
+    if(txlen == CTM2AVC_SWUP_PACKET_SIZE){
+        printf("-- send_tcp_data_to_avc, ret: %d txlen %d\n", ret,txlen);
+        int i, k;
+        printf("\n");
+        printf("---- TCP send (COP --> AVC) ----\n   ");
+        for(i=0; i < 10; i++) 
+            printf("_%1X ", i);
+        for (i = 0, k = 0; i < txlen; i++, k++) {
+            //if ((k % 16) == 0)
+            if ((k % 10) == 0)
+                printf("\n%1x_ ", (k==0)?0:k/10);
 
+            if ( (i == CTM2AVC_SWUP_PACKET_SIZE) || (i == (CTM2AVC_SWUP_PACKET_SIZE*2)) ) {
+                printf("\n");
+                printf("--------------------------------\n");
+                printf("\n");
+                printf("---- TCP SEND (COP--> AVC) ----");
+                printf("\n0_ ");
+                k = 0; 
+            }    
+
+            printf("%02X ",txbuf[i]);
+        }    
+        printf("\n");
+        printf("--------------------------------\n");
+    }    
+#endif  
 //printf("-- send_tcp_data_to_avc, ret: %d\n", ret);
     if (ret >= 0) {
         if (FD_ISSET(avc_tcp_sock, &wset)) {

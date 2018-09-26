@@ -53,7 +53,14 @@ SOURCES += main.cpp\
     scribblewidget.cpp \
     calibration.cpp \
     orig/func_db_update.c \
-    orig/g711.c
+    orig/g711.c \
+	orig/usb_update.c \
+	orig/StrLib.c \
+    sub_device.cpp \
+    file_upload.cpp \
+    progressdlg.cpp \
+    ftpclient.cpp \
+    updatemainframe.cpp
 
 HEADERS  += mainwindow.h \
     orig/xalloc.h \
@@ -92,9 +99,18 @@ HEADERS  += mainwindow.h \
     cop_main.h \
     scribblewidget.h \
     calibration.h \
-    orig/g711.h
+    orig/g711.h \
+	orig/usb_update.h \
+	orig/StrLib.h \	
+    sub_device.h \
+    file_upload.h \
+    updatemainframe.h \
+    ftpclient.h \
+    progressdlg.h
 
-FORMS    += mainwindow.ui
+FORMS    += mainwindow.ui \
+    updatemainframe.ui \
+    progressdlg.ui
 
 OTHER_FILES +=
 

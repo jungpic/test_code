@@ -7,7 +7,7 @@
 #include <QSize>
 #include <QStyleOptionViewItem>
 #include <QItemDelegate>
-
+#include <QThread>
 #include <QtNetwork>
 #include <QtNetwork/QUdpSocket>
 
@@ -17,6 +17,13 @@
 #include "cop_main.h"
 #include "calibration.h"
 #include "scribblewidget.h"
+#include "sub_device.h"
+#include "file_upload.h"
+
+#include "updatemainframe.h"
+
+#include "progressdlg.h"
+#include "ftpclient.h"
 
 #define DISP_STAT_NO_ACTIVE_NO_SELECT           1
 #define DISP_STAT_NO_ACTIVE_SELECT              2
@@ -39,6 +46,7 @@
 #define OCC_BTN_UPDATE_TIME             500             // Miliseconds
 #define INOUT_BTN_UPDATE_TIME           100             // Miliseconds
 #define CAB_BTN_ENABLE_TIME             500             // Miliseconds
+#define CTM_STATUS_UPDATE_TIME          100             // Miliseconds
 
 #define TOP_MENU		0
 #define CONFIG_MENU		1
@@ -49,6 +57,12 @@
 #define STATION_MENU	5
 #define STATION_PA_MENU 6
 #define ROUTE_MENU		7
+//-----------------------
+#define STATUS_MENU		8
+#define MANAGER_MENU	9
+//-----------------------
+#define SWUPDATE_MENU	10
+#define LOGDOWN_MENU	12
 
 #define LANG_TURKISH            0
 #define LANG_ENGLISH            1
@@ -192,6 +206,58 @@ enum STATION_PA_BTN_ID
 	STATION_PA_BTN_ID_MAX,
 };
 
+enum STATUS_BTN_ID
+{
+	STATUS_BTN_ID_NONE,
+
+	STATUS_BTN_UP,
+	STATUS_BTN_DOWN,
+
+    STATUS_BTN_ID_MAX,
+};
+
+enum SUB_DEV_ID
+{
+    ID_NONE,
+    PIB,
+    SCAM,
+    FCAM,
+    COP,
+    PAMP,
+    PEI,
+    LRM,
+    PID,
+    DIF,
+    NVR
+};
+
+/*device index*/
+#define PIB_INDEX   0
+#define SCAM_INDEX  8
+#define FCAM_INDEX  24
+#define COP_INDEX   26
+#define PAMP_INDEX  28
+#define PEI_INDEX   36
+#define LRM_INDEX   52
+#define PID_INDEX   84
+#define DIF_INDEX   132
+#define NVR_INDEX   142
+
+
+
+#define MAX_DEVICE_LEN 255
+#define DEVICE_CNT 40
+#define SUB_DEVICE_CNT 136
+ //char SUB_DEVICE_NAME[DEVICE_CNT][MAX_DEVICE_LEN];
+/*
+typedef struct _st_ctm_device{
+    char SUB_DEVICE_NAME[MAX_DEVICE_LEN];
+}STRUCT_CTM_DEVICE;
+
+static STRUCT_CTM_DEVICE stCTMdevice[DEVICE_CNT] = {
+    {"AVC"},{"COP"},{"FDI"},{"PIB_1"},{"PIB_2"},{"SDI_1"},{"SDI_2"},
+};*/
+
 extern "C" {
 void force_reboot(void);
 
@@ -225,7 +291,17 @@ int cmd_di_display_stop(void);
 int cmd_set_route(unsigned int departure, unsigned int destination);
 int cmd_set_special_route_start(unsigned short code);
 int cmd_set_special_route_stop(unsigned short code);
+int send_cop2avc_cmd_sw_version_request(char SWversion[], char add4,char add3,char add2,char add1);
+int send_cop2avc_cmd_sw_update_start(short SWversion, char add4,char add3,char add2,char add1,int DeviceId);
+int copy_usb2tmp(void);
+//int run_ftp_upload_execlp(void);
+//int run_ftp_all_upload_execlp(void);
+int run_ftp_upload_execlp(char* AVC_IP, char* Update_filename);
+int run_ftp_all_mc1_upload_execlp(void);
+int run_ftp_all_mc2_upload_execlp(void);
 }
+
+class updateMainFrame;
 
 namespace Ui {
 class MainWindow;
@@ -237,10 +313,11 @@ class RowHeightDelegate : public QItemDelegate
 
 public:
     QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
-    {
+    {        
         return QSize(1, 40);
     }
 };
+
 
 class MainWindow : public QMainWindow
 {
@@ -252,12 +329,22 @@ public:
     COP_main            *pThread;
     Calibration         *TouchCal;
     ScribbleWidget      *Scribble;
+    Sub_device          *m_thread;
+    File_Upload         *file_thread;
+  //  progressDlg         *m_progressDlg;
+   // ftpClient           *m_ftpClient;
+    ftpClient*      m_pFtpclient;
+    progressDlg*    m_pDlgProgress;
 
+    Ui::MainWindow *ui;
+    Ui::MainWindow* getui() { return ui; }
 private slots:
     void ConnectUpdate(void);
     void ScreenUpdate(void);
     void PEI_CallUpdate(void);
     void CAB_CallUpdate(void);
+    void StatusUpdate(void);
+    void SoftwareUpdateStatus(void);
     void PEI_BTN_1_BLINK_Update(void);
     void PEI_BTN_2_BLINK_Update(void);
     void CAB_BTN_1_BLINK_Update(void);
@@ -272,6 +359,7 @@ private slots:
 	void special_route_button_clicked(int);
 	void station_button_clicked(int);
 	void station_PA_button_clicked(int);
+	void status_button_clicked(int);
 
 	void on_BUTTON_CANCEL_clicked();
 
@@ -302,8 +390,46 @@ private slots:
 
     void on_TOUCH_CAL_clicked();
 
+    void on_NUMBER_1_clicked();
+    void on_NUMBER_2_clicked();
+    void on_NUMBER_3_clicked();
+    void on_NUMBER_4_clicked();
+    void on_NUMBER_5_clicked();
+    void on_NUMBER_6_clicked();
+    void on_NUMBER_7_clicked();
+    void on_NUMBER_8_clicked();
+    void on_NUMBER_9_clicked();
+    void on_NUMBER_0_clicked();
+
+    void on_NUMBER_OK_clicked();
+
+    void on_NUMBER_RESET_clicked();
+
+  //  void on_SUBDEVICE_1_clicked();
+    void on_SUBDEVICE_PIB_clicked();
+    void on_SUBDEVICE_SCAM_clicked();
+    void on_SUBDEVICE_FCAM_clicked();
+    void on_SUBDEVICE_COP_clicked();
+    void on_SUBDEVICE_PAMP_clicked();
+    void on_SUBDEVICE_PEI_clicked();
+    void on_SUBDEVICE_LRM_clicked();
+    void on_SUBDEVICE_PID_clicked();
+    void on_SUBDEVICE_DIF_clicked();
+    void on_SUBDEVICE_NVR_clicked();
+    void on_SUBDEVICE_FILE_UP_clicked();
+
+    //void on_thread_finish(const int value);
+    //void on_file_thread_finish(const int value);
+    void SwUpdateCellSelected(int, int);    
+    void finishedUpdateFileList_1(void);
+    void on_bt_LIST_DOWN_clicked();
+    void on_bt_LIST_UP_clicked();
+    void ftpClient_finished( qint32,qint32 );
+
+//    void ftpClient_finished( qint32,qint32 ) ;
+
 private:
-    Ui::MainWindow *ui;
+
 
     //QUdpSocket      *PIB_ReceiverSocket;
     //QHostAddress    PIB_ReceiverAddress;
@@ -341,6 +467,7 @@ private:
 	QButtonGroup	*pRouteSBtnGroup;
 	QButtonGroup	*pStationBtnGroup;
 	QButtonGroup	*pStation_PA_BtnGroup;
+	QButtonGroup	*pStatus_BtnGroup;
 
 	QTime			log_busy_display_time;
 
@@ -352,6 +479,9 @@ private:
     QTimer          *CAB_CallUpdateTimer;
     QTimer          *CAB_BTN_1_BlinkTimer;
     QTimer          *CAB_BTN_2_BlinkTimer;
+	
+	QTimer          *CTM_StatusUpdateTimer;
+    QTimer          *CTM_SWUpdateTimer;
 
 	void activate_button(int enable);
 	void activate_button_for_route(int enable);
@@ -363,6 +493,23 @@ private:
 	void refresh_station_fpa_name(void);
 	void refresh_special_route_name(void);
 	void pick_out_station_fpa(int code);
+	void refresh_status_device(void);
+    void status_update_single_MC2(void);
+    void status_update_single_MC1(void);
+    void status_update_single_M(void);
+    void status_update_single_T(void);
+    void status_update_dual_MC2(void);
+    void status_update_dual_MC1(void);
+    void status_update_dual_M(void);
+    void status_update_dual_T(void);
+    void setupSubDeviceItem(void);
+    void initSubDeviceStatus(void);
+    void initSubDevIcon(void);
+    void initNumberIcon(void);
+
 	unsigned short calc_car_num_from_train_num(char train_num, char single_car_num);
+
+    updateMainFrame* m_pUpdateFrame;
+
 };
 #endif // MAINWINDOW_H

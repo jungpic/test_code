@@ -1,6 +1,6 @@
 #ifndef __COP_KEY_PROCESS_H__
 #define __COP_KEY_PROCESS_H__
-
+#include "gpio_key_dev.h"
 #define FIRE_ALARM_TIMER			0
 
 #define LOG_MESSAGE_DISPLAY_TIME	2	// Second

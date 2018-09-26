@@ -2,8 +2,16 @@
 #include "ui_mainwindow.h"
 #include <QString>
 #include <QWSServer>
-
+#include <qthread.h>
+#include <QIcon>
+#include <QPixmap>
 #include "orig/cob_process_extern.h"
+#include "orig/avc_tcp.h"
+#include "orig/usb_update.h"
+#include <QFtp>
+#include <QtNetwork>
+#include <QAbstractScrollArea>
+#include <QScrollBar>
 
 enum __cop_key_enum {
     enum_COP_KEY_NONE = 0,
@@ -32,8 +40,12 @@ enum line_color_enum {
 
 enum line_color_enum line_button_color[2];
 
-extern COP_Cur_Status_t __broadcast_status;
+//extern COP_Cur_Status_t __broadcast_status;
 
+extern packet_AVC2CTM_t avc2ctm_packet; //add ctm function
+extern packet_AVC2CTM_EVENT_t  avc2ctm_log_event_packet; /*ctm sw log event packet */
+
+extern char AVC2CTM_msg[53];
 extern int Log_Status;
 
 extern int mic_vol_level;
@@ -68,6 +80,10 @@ extern unsigned char avc_di_display_id;
 extern unsigned char avc_departure_id;
 extern unsigned char avc_destination_id;
 extern int avc_special_route_pattern;
+extern char avc_status;
+
+extern SubDevice_t g_SubDevice[150]; /*MC1 , T, M, MC2 */
+extern UsbUpdateSW_t 	UsbSwVer; /*sw update version usb */
 
 #define LINE_COUNT_MAX			2
 #define STATION_COUNT_MAX		255
@@ -112,6 +128,7 @@ unsigned int a_station_fpa_count;
 struct func_broadcast_data a_station_fpa_info[FUNC_BROADCAST_COUNT_MAX];
 
 struct func_broadcast_ui_data ui_station_fpa_status;
+struct func_broadcast_ui_data ui_status_device_status;
 
 #define SPECIAL_ROUTE_COUNT_MAX		20
 #define SPECIAL_ROUTE_NAME_LEN_MAX	255
@@ -120,7 +137,10 @@ struct func_broadcast_ui_data ui_special_route_status;
 extern int special_route_count;
 extern struct station_data special_route_info[SPECIAL_ROUTE_COUNT_MAX];
 
+extern int iDetectFlag; /* USB insert flag*/
+const int columnCount =5;
 #define MAX_STATION_NAME        2048
+int scrollvalue = 0 ;
 
 /* Color code definitions */
 #define COLOR_SKY				"background-color: #03A1E8; color: black;	\
@@ -129,6 +149,8 @@ extern struct station_data special_route_info[SPECIAL_ROUTE_COUNT_MAX];
 					   selection-background-color: #FF0066;"
 #define COLOR_NAVY				"background-color: #0C1441; color: white;	\
 					   selection-background-color: #0C1441;"
+#define COLOR_NAVY_1			"color: gray;"
+#define COLOR_YELLOW_1			"color: black;"
 #define COLOR_LIGHT_NAVY		"background-color: #B4B9D3; color: black;	\
 					   selection-background-color: #B4B9D3;"
 #define COLOR_BLUE              "background-color: blue; color: white;	\
@@ -139,7 +161,7 @@ extern struct station_data special_route_info[SPECIAL_ROUTE_COUNT_MAX];
 					   selection-background-color: #00C600;"
 #define COLOR_RED				"background-color: #DA262F; color: white;	\
 					   selection-background-color: #DA262F;"
-//								border-color:red; gridline-color:white; selection-color:blue; selection-background-color:yellow;"
+//	border-color:red; gridline-color:white; selection-color:blue; selection-background-color:yellow;"
 #define COLOR_RED_B				"background-color: #DA262F; color: black;	\
 					   selection-background-color: #DA262F;"
 #define COLOR_FUNC_RED			"background-color: red; color: white;	\
@@ -219,6 +241,9 @@ extern struct station_data special_route_info[SPECIAL_ROUTE_COUNT_MAX];
 #define COLOR_ROUTE_OK			COLOR_WHITE
 #define COLOR_ROUTE_OK_ACTIVE	COLOR_OK_BUTTON
 #define COLOR_STATION_BUTTON	COLOR_FUNC_NUM_LIGHT_NAVY
+//define COLOR DEVICE
+#define COLOR_DEVICE_ACTIVE		COLOR_YELLOW_1
+#define COLOR_DEVICE_NOT_ACTIVE	COLOR_NAVY_1
 
 extern char Departure_Name_Turkish[MAX_STATION_NAME];
 extern char Departure_Name_English[MAX_STATION_NAME];
@@ -250,6 +275,13 @@ extern struct PEI_Call_Status  pei_call_status[2];
 extern int pei_join_button_on;
 extern int pei_call_count;
 
+int  g_Current_qlist_dev =0;
+int  g_iSelectedDev = 255;
+QString UpString[2] = {"UPDATE","UPDATTING ..."};
+QString UpStatusString[8] = {"Bekleniliyor ...","Disabling EWF ...",
+                             "UDATE ERROR","UPDATE complete","FtpOK",
+                             "FtpError","fileDownOK","fileDownError",
+                            };
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
@@ -271,13 +303,22 @@ MainWindow::MainWindow(QWidget *parent) :
 
     ui->LANG_COMBO->setItemDelegate(new RowHeightDelegate());
 
+    initSubDeviceStatus();
+
+    /* SUBDEVICE_TABLE init*/
+
+    setupSubDeviceItem();
+
+
 	pMenuBtnGroup = new QButtonGroup(this);
 	pMenuBtnGroup->addButton(ui->BUTTON_TOP, TOP_MENU);
 	pMenuBtnGroup->addButton(ui->BUTTON_CONFIG, CONFIG_MENU);
 	pMenuBtnGroup->addButton(ui->BUTTON_CALL, CALL_MENU);
 	pMenuBtnGroup->addButton(ui->BUTTON_ROUTE, ROUTE_S_MENU);
 	pMenuBtnGroup->addButton(ui->BUTTON_DI, DI_MENU);
-	connect(pMenuBtnGroup, SIGNAL(buttonClicked(int)), this, SLOT(menu_button_clicked(int)));
+    pMenuBtnGroup->addButton(ui->BUTTON_STATUS, STATUS_MENU);
+    pMenuBtnGroup->addButton(ui->BUTTON_MANAGER, MANAGER_MENU);
+    connect(pMenuBtnGroup, SIGNAL(buttonClicked(int)), this, SLOT(menu_button_clicked(int)));
 
 	pTopBtnGroup = new QButtonGroup(this);
 	pTopBtnGroup->addButton(ui->FUNC_1, TOP_BTN_ID_1);
@@ -383,12 +424,35 @@ MainWindow::MainWindow(QWidget *parent) :
 	pStation_PA_BtnGroup->addButton(ui->STATION_PA_BACK, STATION_PA_BTN_ID_BACK);
 	connect(pStation_PA_BtnGroup, SIGNAL(buttonClicked(int)), this, SLOT(station_PA_button_clicked(int)));
 
+	pStatus_BtnGroup = new QButtonGroup(this);
+	pStatus_BtnGroup->addButton(ui->STATUS_UP,   STATUS_BTN_UP);
+	pStatus_BtnGroup->addButton(ui->STATUS_DOWN, STATUS_BTN_DOWN);
+	connect(pStatus_BtnGroup, SIGNAL(buttonClicked(int)), this, SLOT(status_button_clicked(int)));
+
+    initNumberIcon();
+
     ui->MENU->setCurrentIndex(TOP_MENU);
+
+
     ui->BUTTON_TOP->setDisabled(false);
     ui->BUTTON_CONFIG->setDisabled(false);
 	ui->BUTTON_CALL->setDisabled(false);
 	ui->BUTTON_ROUTE->setDisabled(false);
     ui->BUTTON_DI->setDisabled(false);
+    ui->BUTTON_STATUS->setDisabled(false);
+    ui->BUTTON_MANAGER->setDisabled(false);
+
+    ui->SUBDEVICE_COP->setDisabled(false);
+    ui->SUBDEVICE_DIF->setDisabled(false);
+    ui->SUBDEVICE_FCAM->setDisabled(false);
+    ui->SUBDEVICE_FILE_UP->setDisabled(false);
+    ui->SUBDEVICE_LRM->setDisabled(false);
+    ui->SUBDEVICE_NVR->setDisabled(false);
+    ui->SUBDEVICE_PAMP->setDisabled(false);
+    ui->SUBDEVICE_PEI->setDisabled(false);
+    ui->SUBDEVICE_PIB->setDisabled(false);
+    ui->SUBDEVICE_PID->setDisabled(false);
+    ui->SUBDEVICE_SCAM->setDisabled(false);
 
     language_selection = LANG_TURKISH;
     on_LANG_COMBO_currentIndexChanged(language_selection);
@@ -416,6 +480,12 @@ MainWindow::MainWindow(QWidget *parent) :
 	ui_func_broadcast_status.current_page 	= 0;
 	ui_func_broadcast_status.selected_idx 	= -1;
 	ui_func_broadcast_status.selected_page 	= -1;
+
+	ui_status_device_status.total_page 	= 4;
+    ui_status_device_status.current_page 	= 0;
+	ui_status_device_status.selected_idx 	= -1;
+	ui_status_device_status.selected_page 	= -1;
+
 
     ui->TITLE_LOGO_ICON->setPixmap(QPixmap(":/Logo_101_81_gray.jpg"));
     ui->TITLE_LOGO_ICON->show();
@@ -462,6 +532,16 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(CAB_CallUpdateTimer, SIGNAL(timeout()), this, SLOT(CAB_CallUpdate()));
     CAB_CallUpdateTimer->start(CAB_CALL_UPDATE_TIME);
 
+#if 1
+    CTM_StatusUpdateTimer = new QTimer(this);
+    connect(CTM_StatusUpdateTimer, SIGNAL(timeout()), this, SLOT(StatusUpdate()));
+    CTM_StatusUpdateTimer->start(CTM_STATUS_UPDATE_TIME);
+
+    CTM_SWUpdateTimer = new QTimer(this);
+    connect(CTM_SWUpdateTimer, SIGNAL(timeout()), this, SLOT(SoftwareUpdateStatus()));
+    CTM_SWUpdateTimer->start(CTM_STATUS_UPDATE_TIME);
+
+#endif
     PEI_BTN_1_BlinkTimer_Status = 0;
     PEI_BTN_2_BlinkTimer_Status = 0;
     pei_1 = 0;
@@ -484,23 +564,363 @@ MainWindow::MainWindow(QWidget *parent) :
     CAB_BTN_2_BlinkTimer = new QTimer(this);
     connect(CAB_BTN_2_BlinkTimer, SIGNAL(timeout()), this, SLOT(CAB_BTN_2_BLINK_Update()));
 
+//    m_thread = new Sub_device(this);
+//    connect(m_thread,SIGNAL(finish_request()),this, SLOT(on_thread_finish(int)));
+
+//    file_thread = new File_Upload(this);
+//    connect(file_thread,SIGNAL(finish_fileUpload()),this, SLOT(on_file_thread_finish(int)));
+
+
     pThread = new COP_main(this);
 
-    //qDebug() << "Stack size 1: " << pThread->stackSize();
+    qDebug() << "Stack size 1: " << pThread->stackSize();
     pThread->setStackSize(16*1024*1024);
     pThread->start();
     qDebug() << "Stack size 2: " << pThread->stackSize();
 
     ReadCalibrationData(CALIBRATION_FILE);
 
+    palette->setColor(QPalette::WindowText, Qt::white);
+    ui->NUMBER_PASSWORD_2->setPalette(*palette);    
+    ui->STATUS_LABEL_TRAIN->setPalette(*palette);
+    ui->STATUS_LABEL_MC->setPalette(*palette);
+    ui->STATUS_LABEL_M->setPalette(*palette);
+    ui->Master_AVC_IP_2->setText(AVC_Master_IPName);
+
+
     delete palette;
+
+
+
+
+
+    m_pFtpclient = new ftpClient;
+    m_pFtpclient->connectToServer( "10.128.9.33", "wbpa", "dowon1222" );
+  //  m_pFtpclient->connectToServer( "10.128.12.33", "wbpa", "dowon1222" );
+    //m_pFtpclient->connectToServer( "10.128.1.101", "wbpa", "dowon1222" );
+    //m_pFtpclient->connectToServer( "10.128.0.2", "root", "it1234" );
+    m_pFtpclient->changeDirectory("/sw_update");
+  //  m_pFtpclient->refreshList();
+
+
+    connect( m_pFtpclient,    SIGNAL( updateFileList() ),
+             this,            SLOT  ( finishedUpdateFileList_1()));
+
+    m_pDlgProgress = new progressDlg;
+
+    connect( m_pFtpclient   , SIGNAL( prograssing(qint32,qint32,qint32,qint32) ),
+             m_pDlgProgress , SLOT  ( prograssing(qint32,qint32,qint32,qint32) ));
+
+    connect( m_pFtpclient   , SIGNAL( finished( qint32,qint32 ) ),
+             m_pDlgProgress , SLOT  ( finished( qint32,qint32 ) ));
+
+    connect( m_pFtpclient   , SIGNAL( finished( qint32,qint32 ) ),
+             this , SLOT  ( ftpClient_finished( qint32,qint32 ) ));
+
+//    connect( m_pFtpclient   , SIGNAL( finished() ),
+//             m_pDlgProgress , SLOT( finished() ));
+
+    connect(ui->bt_LIST_DOWN ,SIGNAL(clicked()),this, SLOT(on_bt_LIST_DOWN_clicked()));
+    connect(ui->bt_LIST_UP ,SIGNAL(clicked()),this, SLOT(on_bt_LIST_UP_clicked()));
+
+    /*log Download Menu add */
+    m_pUpdateFrame = new updateMainFrame( this );
+    ui->MENU->addWidget(m_pUpdateFrame);
 }
+
 
 MainWindow::~MainWindow()
 {
     delete ui;
-    force_reboot();
+    //force_reboot();
+    //jhlee
 }
+
+/* Sub Deivce Status UI */
+void MainWindow::initSubDeviceStatus(void)
+{
+    int i =0;
+    /* init SubDevice status */
+    QString Sub_device_1[DEVICE_CNT] = {
+        "AVC","COP", "PEI_1","PEI_2","PEI_3","PEI_4", "PAMP_1","PAMP_2",
+    };
+    QString Sub_device_2[DEVICE_CNT] = {
+        "FDI","PIB_1",
+    };
+    QString Sub_device_3[DEVICE_CNT] = {
+        "LRM_1", "LRM_2", "LRM_3", "LRM_4", "LRM_5","LRM_6","LRM_7","LRM_8" ,
+    };
+    QString Sub_device_4[DEVICE_CNT] = {
+        "FCAM","SCAM_1","SCAM_2","SCAM_3","SCAM_4",
+    };
+    QString Sub_device_5[DEVICE_CNT] = {
+        "PID_1", "PID_2", "PID_3", "PID_4", "PID_5", "PID_6", "PID_7", "PID_8",
+        "PID_9", "PID_10", "PID_11", "PID_12",
+    };
+    QString Sub_device_6[DEVICE_CNT] = {
+       "PIB_1","PIB_2"
+    };
+    QString Sub_device_7[DEVICE_CNT] = {
+        "PEI_1","PEI_2","PEI_3","PEI_4","PAMP_1","PAMP_2",
+    };
+    QString Sub_device_8[DEVICE_CNT] = {
+        "LRM_1", "LRM_2", "LRM_3", "LRM_4", "LRM_5","LRM_6","LRM_7","LRM_8" ,
+        "SCAM_1","SCAM_2","SCAM_3","SCAM_4"
+    };
+    QString Sub_device_9[DEVICE_CNT] = {
+        "PID_1", "PID_2", "PID_3", "PID_4", "PID_5", "PID_6", "PID_7", "PID_8",
+        "PID_9", "PID_10", "PID_11", "PID_12",
+    };
+
+/*
+    ui->STATUS_LABEL_BG->setPixmap(QPixmap(":/back.jpg"));
+    ui->STATUS_LABEL_BG->show();
+    ui->STATUS_LABEL_BG_2->setPixmap(QPixmap(":/back.jpg"));
+    ui->STATUS_LABEL_BG_2->show();
+    ui->STATUS_LABEL_BG_3->setPixmap(QPixmap(":/back.jpg"));
+    ui->STATUS_LABEL_BG_3->show();
+*/
+
+    ui->STATUS_LABEL_BG->setStyleSheet(COLOR_LIGHT_NAVY);
+    ui->STATUS_LABEL_BG_2->setStyleSheet(COLOR_LIGHT_NAVY);
+    ui->STATUS_LABEL_BG_3->setStyleSheet(COLOR_LIGHT_NAVY);
+    //ui->STATUS_LABEL_BG->show();
+
+    //ui->FUNC_UP->setStyleSheet(COLOR_FUNC_NUM);
+
+    for( i =0;i<8;i++)  {
+        ui->LIST_SUBDEVICE_1->addItem(Sub_device_1[i]);
+        ui->LIST_SUBDEVICE_3->addItem(Sub_device_3[i]);
+    }
+    for(i = 0; i<2;i++) {
+        ui->LIST_SUBDEVICE_2->addItem(Sub_device_2[i]);
+        ui->LIST_SUBDEVICE_6->addItem(Sub_device_6[i]);
+    }
+
+    for(i = 0; i<5;i++) {
+        ui->LIST_SUBDEVICE_4->addItem(Sub_device_4[i]);
+    }
+
+    for(i = 0; i<6;i++) {
+        ui->LIST_SUBDEVICE_7->addItem(Sub_device_7[i]);
+    }
+
+    for(i = 0;i<12;i++) {
+        ui->LIST_SUBDEVICE_5->addItem(Sub_device_5[i]);
+        ui->LIST_SUBDEVICE_8->addItem(Sub_device_8[i]);
+        ui->LIST_SUBDEVICE_9->addItem(Sub_device_9[i]);
+    }
+
+    for( i =0; i<8;i++) {
+        ui->LIST_SUBDEVICE_1->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_1->item(i)->setTextAlignment(Qt::AlignCenter);
+        ui->LIST_SUBDEVICE_3->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_3->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_3->item(i)->setTextAlignment(Qt::AlignCenter);
+    }
+
+    for( i =0;i<2;i++) {
+        ui->LIST_SUBDEVICE_2->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_2->item(i)->setTextAlignment(Qt::AlignCenter);
+        ui->LIST_SUBDEVICE_6->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_6->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_6->item(i)->setTextAlignment(Qt::AlignCenter);
+    }
+    for( i =0;i<5;i++) {
+        ui->LIST_SUBDEVICE_4->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_4->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_4->item(i)->setTextAlignment(Qt::AlignCenter);
+    }
+    for( i =0;i<6;i++) {
+        ui->LIST_SUBDEVICE_7->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_7->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_7->item(i)->setTextAlignment(Qt::AlignCenter);
+    }
+
+    for( i =0;i<12;i++) {
+        ui->LIST_SUBDEVICE_5->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_5->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_5->item(i)->setTextAlignment(Qt::AlignCenter);
+        ui->LIST_SUBDEVICE_8->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_8->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_8->item(i)->setTextAlignment(Qt::AlignCenter);
+        ui->LIST_SUBDEVICE_9->item(i)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_9->item(i)->setTextColor(Qt::white);
+        ui->LIST_SUBDEVICE_9->item(i)->setTextAlignment(Qt::AlignCenter);    }
+
+}
+#define ICON_H 79
+#define ICON_L 69
+void MainWindow::initSubDevIcon(void)
+{
+    /*
+    ui->SUBDEVICE_PIB->setIcon(QIcon(QPixmap(":/pib_down.jpg")));
+    ui->SUBDEVICE_PIB->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_PIB->show();
+    ui->SUBDEVICE_SCAM->setIcon(QIcon(QPixmap(":/scam_down.jpg")));
+    ui->SUBDEVICE_SCAM->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_SCAM->show();
+    ui->SUBDEVICE_FCAM->setIcon(QIcon(QPixmap(":/focam_down.jpg")));
+    ui->SUBDEVICE_FCAM->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_FCAM->show();
+    ui->SUBDEVICE_COP->setIcon(QIcon(QPixmap(":/cop_down.jpg")));
+    ui->SUBDEVICE_COP->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_COP->show();
+    ui->SUBDEVICE_PAMP->setIcon(QIcon(QPixmap(":/pamp_down.jpg")));
+    ui->SUBDEVICE_PAMP->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_PAMP->show();
+    ui->SUBDEVICE_PEI->setIcon(QIcon(QPixmap(":/pei_down.jpg")));
+    ui->SUBDEVICE_PEI->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_PEI->show();
+    ui->SUBDEVICE_LRM->setIcon(QIcon(QPixmap(":/lrm_down.jpg")));
+    ui->SUBDEVICE_LRM->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_LRM->show();
+    ui->SUBDEVICE_PID->setIcon(QIcon(QPixmap(":/pid_down.jpg")));
+    ui->SUBDEVICE_PID->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_PID->show();
+    ui->SUBDEVICE_DIF->setIcon(QIcon(QPixmap(":/difdis_down.jpg")));
+    ui->SUBDEVICE_DIF->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_DIF->show();
+    ui->SUBDEVICE_NVR->setIcon(QIcon(QPixmap(":/nvr_down.jpg")));
+    ui->SUBDEVICE_NVR->setIconSize(QSize(ICON_H,ICON_L));
+    ui->SUBDEVICE_NVR->show();
+
+    */
+
+    ui->SUBDEVICE_FILE_UP->setIcon(QIcon(QPixmap(":/fileupload_off.jpg")));
+    ui->SUBDEVICE_FILE_UP->setIconSize(QSize(90,50));
+    ui->SUBDEVICE_FILE_UP->show();
+
+//    ui->DEVICE_UP->setIcon(QIcon(QPixmap(":/btn_control_up_over.jpg")));
+//    ui->DEVICE_UP->setIconSize(QSize(90,50));
+//    ui->DEVICE_UP->show();
+
+//    ui->DEVICE_DOWN->setIcon(QIcon(QPixmap(":/btn_control_down_over.jpg")));
+//    ui->DEVICE_DOWN->setIconSize(QSize(90,50));
+//    ui->DEVICE_DOWN->show();
+
+    ui->STATUS_UP->setIcon(QIcon(QPixmap(":/btn_control_up_over.jpg")));
+    ui->STATUS_UP->setIconSize(QSize(86,56));
+    ui->STATUS_UP->show();
+
+    ui->STATUS_DOWN->setIcon(QIcon(QPixmap(":/btn_control_down_over.jpg")));
+    ui->STATUS_DOWN->setIconSize(QSize(86,56));
+    ui->STATUS_DOWN->show();
+
+    ui->STATUS_LABEL_TRAIN_PIC->setPixmap(QPixmap(":/train.jpg"));
+    ui->STATUS_LABEL_TRAIN_PIC->show();
+
+    //
+
+}
+#define NUMICON_H 100
+#define NUMICON_L 100
+void MainWindow::initNumberIcon(void)
+{
+    ui->NUMBER_0->setIcon(QIcon(QPixmap(":/n0_down.jpg")));
+    ui->NUMBER_0->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_0->show();
+    ui->NUMBER_1->setIcon(QIcon(QPixmap(":/n1_down.jpg")));
+    ui->NUMBER_1->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_1->show();
+    ui->NUMBER_2->setIcon(QIcon(QPixmap(":/n2_down.jpg")));
+    ui->NUMBER_2->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_2->show();
+    ui->NUMBER_3->setIcon(QIcon(QPixmap(":/n3_down.jpg")));
+    ui->NUMBER_3->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_3->show();
+    ui->NUMBER_4->setIcon(QIcon(QPixmap(":/n4_down.jpg")));
+    ui->NUMBER_4->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_4->show();
+    ui->NUMBER_5->setIcon(QIcon(QPixmap(":/n5_down.jpg")));
+    ui->NUMBER_5->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_5->show();
+    ui->NUMBER_6->setIcon(QIcon(QPixmap(":/n6_down.jpg")));
+    ui->NUMBER_6->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_6->show();
+    ui->NUMBER_7->setIcon(QIcon(QPixmap(":/n7_down.jpg")));
+    ui->NUMBER_7->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_7->show();
+    ui->NUMBER_8->setIcon(QIcon(QPixmap(":/n8_down.jpg")));
+    ui->NUMBER_8->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_8->show();
+    ui->NUMBER_9->setIcon(QIcon(QPixmap(":/n9_down.jpg")));
+    ui->NUMBER_9->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_9->show();
+    ui->NUMBER_OK->setIcon(QIcon(QPixmap(":/nok_down.jpg")));
+    ui->NUMBER_OK->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_OK->show();
+    ui->NUMBER_RESET->setIcon(QIcon(QPixmap(":/nreset_down.jpg")));
+    ui->NUMBER_RESET->setIconSize(QSize(NUMICON_H,NUMICON_L));
+    ui->NUMBER_RESET->show();
+}
+/* 클릭할때마다 그려야할까? */
+QString PIB_device[9][5] = {
+    { "PIB..9.129(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "PIB..9.130(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "PIB..10.129(128)","", "00.00","Bekleniliyor ...","",},
+    { "PIB..10.130(128)","", "00.00","Bekleniliyor ...","",},
+    { "PIB..11.129(128)","", "00.00","Bekleniliyor ...","",},
+    { "PIB..11.130(128)","", "00.00","Bekleniliyor ...","",},
+    { "PIB..12.129(128)","", "00.00","Bekleniliyor ...","",},
+    { "PIB..12.130(128)","", "00.00","Bekleniliyor ...","",},
+    { "","", "","","",},
+};
+/* Sub Deivce Software Update UI */
+void MainWindow::setupSubDeviceItem(void)
+{
+    /*init PIB sw status */
+    const int rowCount = 9;
+    QStringList m_TableHeader;
+
+    ui->SUBDEVICE_TABLE->setSelectionMode(QAbstractItemView::SingleSelection);
+    ui->SUBDEVICE_TABLE->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowCount);
+
+    m_TableHeader<<"DEVICE"<<"CURRENT"<<"USB"<<"STATUS"<<"";
+    ui->SUBDEVICE_TABLE->setHorizontalHeaderLabels(m_TableHeader);
+
+    ui->SUBDEVICE_TABLE->setAlternatingRowColors(1);
+    ui->SUBDEVICE_TABLE->horizontalHeader()->setVisible(1);
+    ui->SUBDEVICE_TABLE->verticalHeader()->setVisible(0);
+    ui->SUBDEVICE_TABLE->setAlternatingRowColors(1);
+    ui->SUBDEVICE_TABLE->setColumnWidth(0,150);
+    ui->SUBDEVICE_TABLE->setColumnWidth(1,110);
+    ui->SUBDEVICE_TABLE->setColumnWidth(2,110);
+    ui->SUBDEVICE_TABLE->setColumnWidth(3,150);
+    ui->SUBDEVICE_TABLE->setColumnWidth(4,156);
+
+    /* insert data QTableWidget */
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+
+            QTableWidgetItem *newItem = new QTableWidgetItem(PIB_device[row][column] ,0);
+
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+
+    initSubDevIcon();
+
+
+   connect( ui->SUBDEVICE_TABLE, SIGNAL( cellClicked (int, int) ),
+   this, SLOT( SwUpdateCellSelected( int, int ) ) );
+
+}
+
 
 void MainWindow::ReadCalibrationData(QString filename)
 {
@@ -535,7 +955,7 @@ void MainWindow::activate_button(int enable)
 		ui->FUNC_UP->setStyleSheet(COLOR_FUNC_NUM);
 		ui->FUNC_DOWN->setStyleSheet(COLOR_FUNC_NUM);
 
-		ui->OCC_BUTTON->setVisible(false);
+        ui->OCC_BUTTON->setVisible(false);
 		ui->OCC_BUTTON->setStyleSheet(COLOR_CALL_BUTTON);
 		ui->CAB_BUTTON->setStyleSheet(COLOR_CALL_BUTTON);
 		ui->CAB_CALL_1->setStyleSheet(COLOR_CALL_NUM);
@@ -703,7 +1123,9 @@ void MainWindow::activate_button(int enable)
 
 		refresh_func_broadcast_name();
 		refresh_station_fpa_name();
-		refresh_special_route_name();
+        refresh_special_route_name();
+        refresh_status_device();
+
 
 		for(int i=STATION_PA_BTN_ID_1 ; i<= STATION_PA_BTN_ID_9; i++)
 		{
@@ -715,6 +1137,14 @@ void MainWindow::activate_button(int enable)
 		ui->STATION_PA_BACK->setStyleSheet(COLOR_FUNC_STATION);
 
 		ui->BUTTON_CANCEL->setStyleSheet(COLOR_CANCLE);
+
+        for(int i=STATUS_BTN_UP; i<STATUS_BTN_ID_MAX; i++)
+        {
+            pStatus_BtnGroup->button(i)->setStyleSheet(COLOR_FUNC_NUM);
+        }
+
+//        ui->DEVICE_UP->setStyleSheet(COLOR_FUNC_NUM);
+//        ui->DEVICE_DOWN->setStyleSheet(COLOR_FUNC_NUM);
 	}
 	else	// deactive
 	{
@@ -802,6 +1232,17 @@ void MainWindow::activate_button(int enable)
 		}
 
 		ui->BUTTON_CANCEL->setStyleSheet(COLOR_NOT_READY);
+
+        for(int i=STATUS_BTN_UP; i<STATUS_BTN_ID_MAX; i++)
+        {
+            pStatus_BtnGroup->button(i)->setStyleSheet(COLOR_NOT_READY);
+        }
+
+//        ui->DEVICE_UP->setStyleSheet(COLOR_NOT_READY);
+//        ui->DEVICE_DOWN->setStyleSheet(COLOR_NOT_READY);
+
+
+
 	}
 
 	refresh_menu_buttons_focus();
@@ -857,6 +1298,7 @@ void MainWindow::activate_button_for_route(int enable)
 
 void MainWindow::activate_button_for_station_PA(int enable)
 {
+#if 1
 	if(enable)	//active
 	{
 		for(int i=STATION_BTN_ID_01; i<=STATION_BTN_ID_16; i++)
@@ -908,6 +1350,7 @@ void MainWindow::activate_button_for_station_PA(int enable)
 			pStationBtnGroup->button(i)->setStyleSheet(COLOR_NOT_READY);
 		}
 	}
+#endif
 }
 
 void MainWindow::PEI_BTN_1_BLINK_Update(void)
@@ -1384,7 +1827,7 @@ void MainWindow::PEI_CallUpdate(void)
 
 void MainWindow::ConnectUpdate(void)
 {
-	int idx=0;
+    //int idx=0;
 	if(done_avc_tcp_connected != last_done_avc_tcp_connected)
 	{
 		QPalette *palette = new QPalette();
@@ -1553,10 +1996,12 @@ void MainWindow::ConnectUpdate(void)
 	}
 }
 
+
+
 void MainWindow::ScreenUpdate(void)
 {
 	static int busy_delay_start = 0;
-	unsigned int tmp;
+    //unsigned int tmp;
 
     QPalette *palette = new QPalette();
     QPalette *palette_black = new QPalette();
@@ -1569,6 +2014,7 @@ void MainWindow::ScreenUpdate(void)
     palette_red->setColor(QPalette::WindowText, Qt::red);
     palette_blue->setColor(QPalette::WindowText, Qt::blue);
 
+
     if(change_to_call_menu && done_avc_tcp_connected) {
         ui->MENU->setCurrentIndex(CALL_MENU);
         change_to_call_menu = 0;
@@ -1580,6 +2026,7 @@ void MainWindow::ScreenUpdate(void)
 		func_activated_code = get_func_is_now_start();
 		refresh_func_broadcast_name();
 		refresh_station_fpa_name();
+
 	}
 
 	if(ui_update_di_and_route > 0)
@@ -1866,9 +2313,29 @@ void MainWindow::refresh_menu_buttons_focus()
 		ui->BUTTON_CALL->setStyleSheet(COLOR_MENU_BUTTON);
 		ui->BUTTON_ROUTE->setStyleSheet(COLOR_MENU_BUTTON);
 		ui->BUTTON_DI->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->BUTTON_STATUS->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->BUTTON_MANAGER->setStyleSheet(COLOR_MENU_BUTTON);
 
-		if(focus_menu_button_index >= TOP_MENU && focus_menu_button_index <= DI_MENU)
-			pMenuBtnGroup->button(focus_menu_button_index)->setStyleSheet(COLOR_MENU_BUTTON_ACTIVE);
+
+        ui->SUBDEVICE_COP->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_DIF->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_FCAM->setStyleSheet(COLOR_MENU_BUTTON);
+      //  ui->SUBDEVICE_FILE_UP->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_LRM->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_NVR->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_PAMP->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_PEI->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_PIB->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_PID->setStyleSheet(COLOR_MENU_BUTTON);
+        ui->SUBDEVICE_SCAM->setStyleSheet(COLOR_MENU_BUTTON);
+
+        if(focus_menu_button_index >= TOP_MENU && focus_menu_button_index <= DI_MENU) {
+            pMenuBtnGroup->button(focus_menu_button_index)->setStyleSheet(COLOR_MENU_BUTTON_ACTIVE);
+        }else if (focus_menu_button_index >= STATUS_MENU && focus_menu_button_index <= MANAGER_MENU){
+            pMenuBtnGroup->button(focus_menu_button_index)->setStyleSheet(COLOR_MENU_BUTTON_ACTIVE);
+        }
+		//if(focus_menu_button_index >= TOP_MENU && focus_menu_button_index <= MANAGER_MENU)
+		
 	}
 	else	// not conntected to AVC
 	{
@@ -1878,8 +2345,28 @@ void MainWindow::refresh_menu_buttons_focus()
 		ui->BUTTON_ROUTE->setStyleSheet(COLOR_NOT_READY);
 		ui->BUTTON_DI->setStyleSheet(COLOR_NOT_READY);
 
-		if(focus_menu_button_index >= TOP_MENU && focus_menu_button_index <= DI_MENU)
-			pMenuBtnGroup->button(focus_menu_button_index)->setStyleSheet(COLOR_MENU_BUTTON);
+
+        ui->SUBDEVICE_COP->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_DIF->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_FCAM->setStyleSheet(COLOR_NOT_READY);
+
+        ui->SUBDEVICE_LRM->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_NVR->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_PAMP->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_PEI->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_PIB->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_PID->setStyleSheet(COLOR_NOT_READY);
+        ui->SUBDEVICE_SCAM->setStyleSheet(COLOR_NOT_READY);
+
+   //     ui->BUTTON_STATUS->setStyleSheet(COLOR_NOT_READY);
+   //     ui->BUTTON_MANAGER->setStyleSheet(COLOR_NOT_READY);
+
+		//if(focus_menu_button_index >= TOP_MENU && focus_menu_button_index <= MANAGER_MENU)
+        if(focus_menu_button_index >= TOP_MENU && focus_menu_button_index <= DI_MENU){
+            pMenuBtnGroup->button(focus_menu_button_index)->setStyleSheet(COLOR_MENU_BUTTON);
+        }else if (focus_menu_button_index >= STATUS_MENU && focus_menu_button_index <= MANAGER_MENU){
+            pMenuBtnGroup->button(focus_menu_button_index)->setStyleSheet(COLOR_MENU_BUTTON);
+        }
 	}
 }
 
@@ -2004,7 +2491,7 @@ void MainWindow::refresh_station_fpa_name(void)
 	printf("\n-- Station FPA button list ---------------------------\n");
 	printf("  total(%d), func_activated_code = %d\n", a_station_fpa_count, func_activated_code);
 	printf("------------------------------------------------------\n");
-
+#if 1
 	for(i=STATION_PA_BTN_ID_1; i<=STATION_PA_BTN_ID_9; i++)
 	{
 		idx = (pdata->current_page * FUNC_BROADCAST_1PAGE_ITEMS) + i-1;
@@ -2033,7 +2520,907 @@ void MainWindow::refresh_station_fpa_name(void)
 			pStation_PA_BtnGroup->button(i)->setText("");
 		}
 	}
+#endif 	
 	printf("------------------------------------------------------\n");
+}
+
+
+void MainWindow::status_update_single_MC1(void)
+{
+    //2~7 mc2
+    int index=2;
+    int start_index = 2;
+    int i = 0, j=0; /* i byte value, j bit shift value */
+
+
+    /*avc*/
+    index = 0;
+    i = 0;
+    j = 0;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*cop*/
+    index = 1;
+    i = 0;
+    j = 2;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*PEI, PAMP*/
+    index = 2;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*fdi*/
+    index = 0;
+    i = 0;
+    j = 3;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+
+    /*pib*/
+    index =1;
+    i = 0;
+    j = 4;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+    /*LRM*/
+    index=0;
+
+    for(int j=0 ; j<8 ; j++) {
+        index = j;
+        if(((AVC2CTM_msg[start_index+2+0]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*FCAM */
+    index = 0;
+    j=0;
+    if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+    }
+    /*SCAM*/
+    for(int j=3 ; j<7 ; j++) {
+        index++;
+        if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+}
+
+
+void MainWindow::status_update_single_T(void)
+{
+    //8-13
+    int index=0;
+    int start_index = 8;
+    int i = 0;
+    /*PIB*/
+    index=0;
+    i = 0;
+    for(int j=4 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*PEI,PAMP*/
+    index=0;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*LRM*/
+    index=0;
+    i = 0;
+    for(int j=0 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+    /*SCAM*/
+    i = 1;
+    for(int j=3 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+}
+void MainWindow::status_update_single_M(void)
+{
+    //14-19
+    int index=0;
+    int start_index = 14;
+    int i =0;
+
+    /*PIB*/
+    index=0;
+    i = 0;
+    for(int j=4 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*PEI,PAMP*/
+    index=0;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*LRM*/
+    index=0;
+    i = 0;
+    for(int j=0 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+    /*SCAM*/
+    i = 1;
+    for(int j=3 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+
+
+
+
+}
+
+void MainWindow::status_update_single_MC2(void)
+{
+    int index =2;
+    int start_index = 20;
+    int i = 0, j=0;
+    //pei ~pamp 21
+
+    /*avc*/
+    index = 0;
+    i = 0;
+    j = 0;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*cop*/
+    index = 1;
+    i = 0;
+    j = 2;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*PEI, PAMP*/
+    index = 2;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*fdi*/
+    index = 0;
+    i = 0;
+    j = 3;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+
+    /*pib*/
+    index =1;
+    i = 0;
+    j = 4;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+    /*LRM*/
+    index=0;
+
+    for(int j=0 ; j<8 ; j++) {
+        index = j;
+        if(((AVC2CTM_msg[start_index+2+0]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*FCAM */
+    index = 0;
+    j=0;
+    if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+    }
+    /*SCAM*/
+    for(int j=3 ; j<7 ; j++) {
+        index++;
+        if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+
+
+
+
+
+}
+void MainWindow::status_update_dual_MC1(void)
+{
+    //26-31 mc2
+
+    int start_index = 26;
+
+    int index =2;
+
+    int i = 0, j=0;
+
+    /*avc*/
+    index = 0;
+    i = 0;
+    j = 0;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*cop*/
+    index = 1;
+    i = 0;
+    j = 2;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*PEI, PAMP*/
+    index = 2;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*fdi*/
+    index = 0;
+    i = 0;
+    j = 3;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+
+    /*pib*/
+    index =1;
+    i = 0;
+    j = 4;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+    /*LRM*/
+    index=0;
+
+    for(int j=0 ; j<8 ; j++) {
+        index = j;
+        if(((AVC2CTM_msg[start_index+2+0]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*FCAM */
+    index = 0;
+    j=0;
+    if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+    }
+    /*SCAM*/
+    for(int j=3 ; j<7 ; j++) {
+        index++;
+        if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+
+
+}
+void MainWindow::status_update_dual_MC2(void)
+{
+    //44-49 mc1
+
+    int start_index = 44;
+    int index =2;
+    int i = 0, j=0;
+
+
+    /*avc*/
+    index = 0;
+    i = 0;
+    j = 0;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*cop*/
+    index = 1;
+    i = 0;
+    j = 2;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+    }
+    /*PEI, PAMP*/
+    index = 2;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_1->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_1->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*fdi*/
+    index = 0;
+    i = 0;
+    j = 3;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+
+    /*pib*/
+    index =1;
+    i = 0;
+    j = 4;
+    if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_2->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_2->item(index)->setTextColor(Qt::white);
+    }
+
+    /*LRM*/
+    index=0;
+
+    for(int j=0 ; j<8 ; j++) {
+        index = j;
+        if(((AVC2CTM_msg[start_index+2+0]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_3->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_3->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*FCAM */
+    index = 0;
+    j=0;
+    if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+    }else {
+        ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+        ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+    }
+    /*SCAM*/
+    for(int j=3 ; j<7 ; j++) {
+        index++;
+        if(((AVC2CTM_msg[start_index+2+1]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_4->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_4->item(index)->setTextColor(Qt::white);
+        }
+
+    }
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_5->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_5->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+
+
+}
+void MainWindow::status_update_dual_T(void)
+{
+    //32-37
+    int index=0;
+    int start_index = 32;
+    int i =0;
+    /*PIB*/
+    index=0;
+    i = 0;
+    for(int j=4 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*PEI,PAMP*/
+    index=0;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*LRM*/
+    index=0;
+    i = 0;
+    for(int j=0 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+    /*SCAM*/
+    i = 1;
+    for(int j=3 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+
+}
+void MainWindow::status_update_dual_M(void)
+{
+    //38-43
+    int index=0;
+    int start_index = 38;
+    int i = 0 ;
+    /*PIB*/
+    index=0;
+    i = 0;
+    for(int j=4 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_6->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_6->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*PEI,PAMP*/
+    index=0;
+    i = 1;
+    for(int j=0 ; j<6 ; j++) {
+
+        if(((AVC2CTM_msg[start_index+i]>>j)&1)== 1) {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::yellow);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::black);
+        }else {
+            ui->LIST_SUBDEVICE_7->item(index)->setBackgroundColor(Qt::darkBlue);
+            ui->LIST_SUBDEVICE_7->item(index)->setTextColor(Qt::white);
+        }
+        index++;
+    }
+    /*LRM*/
+    index=0;
+    i = 0;
+    for(int j=0 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+    /*SCAM*/
+    i = 1;
+    for(int j=3 ; j<8 ; j++) {
+
+        if(index<12) {
+            if(((AVC2CTM_msg[start_index+2+i]>>j)&1)== 1) {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::yellow);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::black);
+            }else {
+                ui->LIST_SUBDEVICE_8->item(index)->setBackgroundColor(Qt::darkBlue);
+                ui->LIST_SUBDEVICE_8->item(index)->setTextColor(Qt::white);
+            }
+        }
+        index++;
+    }
+
+    /*PID*/
+    index=0;
+    for(int i=0;i<2;i++) {
+        for(int j=0 ; j<8 ; j++) {
+            index = i*8+j;
+            if(index<12) {
+                if(((AVC2CTM_msg[start_index+4+i]>>j)&1)== 1) {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::yellow);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::black);
+                }else {
+                    ui->LIST_SUBDEVICE_9->item(index)->setBackgroundColor(Qt::darkBlue);
+                    ui->LIST_SUBDEVICE_9->item(index)->setTextColor(Qt::white);
+                }
+            }
+        }
+    }
+}
+
+
+//add ctm function
+//struct update ?
+void MainWindow::refresh_status_device(void)
+{
+
+    if(done_avc_tcp_connected == 0)
+        return;
+
+    if(ui->MENU->currentIndex() != STATUS_MENU)
+        return;
+
+	int i=0,idx=0;
+	char label[10]={0,};
+    struct func_broadcast_ui_data *pdata;
+
+	pdata = &ui_status_device_status;//중련이면 4, 중련 연결이 없으면 2로 설정해야함
+	
+    pdata->total_page = 4;
+
+
+    sprintf(label,"%d / %d ", pdata->current_page+1, pdata->total_page);
+    ui->STATUS_LABEL_PAGE->setText(QString::fromUtf8(label));
+
+    switch(pdata->current_page)
+    {
+        case 0 :
+            ui->STATUS_LABEL_MC->setText("MC1");
+            ui->STATUS_LABEL_M->setText("T");
+            ui->STATUS_LABEL_TRAIN->setText("Single TC #0");
+            status_update_single_MC1();//MC2 -> MC1
+            status_update_single_T();//M car is T change
+            break;
+        case 1 :
+            ui->STATUS_LABEL_MC->setText("MC2");
+            ui->STATUS_LABEL_M->setText("M");
+            ui->STATUS_LABEL_TRAIN->setText("Single TC #0");
+            status_update_single_MC2();//MC1 -> MC2
+            status_update_single_M();//T -> M
+            break;
+        case 2 :
+            ui->STATUS_LABEL_MC->setText("MC1");
+            ui->STATUS_LABEL_M->setText("T");
+            ui->STATUS_LABEL_TRAIN->setText("Duble TC #1");
+            status_update_dual_MC1();
+            status_update_dual_T();
+            break;
+        case 3 :
+            ui->STATUS_LABEL_MC->setText("MC2");
+            ui->STATUS_LABEL_M->setText("M");
+            ui->STATUS_LABEL_TRAIN->setText("Duble TC #1");
+            status_update_dual_MC2();
+            status_update_dual_M();
+            break;
+        default :
+            break;
+
+    }
+
 }
 
 void MainWindow::refresh_special_route_name(void)
@@ -2321,10 +3708,10 @@ void MainWindow::top_button_clicked(int id)
 			}
 			break;
 
-		case TOP_BTN_ID_STATION:
-			station_pa_line_selected = 0;
-			activate_button_for_station_PA(/*false*/true);
-			ui->MENU->setCurrentIndex(STATION_MENU);
+		case TOP_BTN_ID_STATION:            
+            station_pa_line_selected = 0;
+            activate_button_for_station_PA(/*false*/true);
+            ui->MENU->setCurrentIndex(STATION_MENU);
 			break;
 
 		default:
@@ -2540,6 +3927,7 @@ void MainWindow::station_PA_button_clicked(int id)
 			break;
 
 		case STATION_PA_BTN_ID_BACK:
+        printf("jhlee ~~~~~~~STATION_PA_BTN_ID_BACK \r\n");
 			ui->MENU->setCurrentIndex(STATION_MENU);
 			break;
 
@@ -2547,6 +3935,38 @@ void MainWindow::station_PA_button_clicked(int id)
 			printf("ERROR : STATION_PA_BTN_ID(%d)\n", id);
 			break;
 	}
+}
+
+
+void MainWindow::status_button_clicked(int id)
+{
+    ui->MENU->setCurrentIndex(STATUS_MENU);
+
+
+	switch(id)
+	{
+		printf("Sstatus_button_clicked(%d)\n", id);
+		case STATUS_BTN_UP:
+			if(ui_status_device_status.current_page > 0)
+			{
+				ui_status_device_status.current_page--;
+                refresh_status_device();
+			}
+			break;
+
+		case STATUS_BTN_DOWN:
+			if(ui_status_device_status.current_page < ui_status_device_status.total_page - 1)
+			{
+				ui_status_device_status.current_page++;
+                refresh_status_device();
+			}
+			break;
+
+		default:
+			printf("ERROR : STATUS_BTN_ID(%d)\n", id);
+			break;
+	}
+	
 }
 
 void MainWindow::on_BUTTON_CANCEL_clicked()
@@ -2738,6 +4158,7 @@ void MainWindow::on_PAMP_OUT_VOL_DOWN_clicked()
     update_pamp_volume_level();
 }
 
+
 #if 0
 void MainWindow::on_PASSIVE_IN_clicked()
 {
@@ -2780,6 +4201,21 @@ void MainWindow::on_LANG_COMBO_currentIndexChanged(int index)
 		ui->BUTTON_CALL->setText("INTERCOM");
 		ui->BUTTON_ROUTE->setText("ROUTE");
 		ui->BUTTON_DI->setText("SPEICIAL DI");
+        ui->BUTTON_STATUS->setText("STATUS");
+        ui->BUTTON_MANAGER->setText("MANAGER");
+
+
+        ui->SUBDEVICE_COP->setText("COP");
+        ui->SUBDEVICE_DIF->setText("DIF");
+        ui->SUBDEVICE_FCAM->setText("FCAM");
+        ui->SUBDEVICE_LRM->setText("LRM");
+        ui->SUBDEVICE_NVR->setText("NVR");
+        ui->SUBDEVICE_PAMP->setText("PAMP");
+        ui->SUBDEVICE_PEI->setText("PEI");
+        ui->SUBDEVICE_PIB->setText("PIB");
+        ui->SUBDEVICE_PID->setText("PID");
+        ui->SUBDEVICE_SCAM->setText("SCAM");
+
 
         ui->CAB_VOL_TITLE->setText("CAB Volume");
         ui->CAB_MIC_VOL_LABEL->setText("MIC");
@@ -2801,34 +4237,47 @@ void MainWindow::on_LANG_COMBO_currentIndexChanged(int index)
     } else {            // Turkish
         language_selection = LANG_TURKISH;
 
-        { char temp[25] = "ANA MENÜ";		ui->BUTTON_TOP->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "SES KONTROLÜ";	ui->BUTTON_CONFIG->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "İNTERKOM";		ui->BUTTON_CALL->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "GÜZERGAH";		ui->BUTTON_ROUTE->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "ÖZEL DI";		ui->BUTTON_DI->setText(QString::fromUtf8(temp)); }
+        ui->SUBDEVICE_COP->setText("COP");
+        ui->SUBDEVICE_DIF->setText("DIF");
+        ui->SUBDEVICE_FCAM->setText("FCAM");
+        ui->SUBDEVICE_LRM->setText("LRM");
+        ui->SUBDEVICE_NVR->setText("NVR");
+        ui->SUBDEVICE_PAMP->setText("PAMP");
+        ui->SUBDEVICE_PEI->setText("PEI");
+        ui->SUBDEVICE_PIB->setText("PIB");
+        ui->SUBDEVICE_PID->setText("PID");
+        ui->SUBDEVICE_SCAM->setText("SCAM");
 
-        { char temp[25] = "Ses Kontrolü(Kabin)"; ui->CAB_VOL_TITLE->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "Mikrofon";          ui->CAB_MIC_VOL_LABEL->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "Hoparlör";          ui->CAB_SPK_VOL_LABEL->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "Ses Kontrolü(Yolcu)"; ui->PASSENGER_VOL_TITLE->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "İÇ";                ui->PASSENGER_IN_VOL_LABEL->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "DIŞ";               ui->PASSENGER_OUT_VOL_LABEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "ANA MENÜ";		ui->BUTTON_TOP->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "SES KONTROLÜ";	ui->BUTTON_CONFIG->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "İNTERKOM";		ui->BUTTON_CALL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "GÜZERGAH";		ui->BUTTON_ROUTE->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "ÖZEL DI";		ui->BUTTON_DI->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "DURUM";		ui->BUTTON_STATUS->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "YÖNETİCİ";		ui->BUTTON_MANAGER->setText(QString::fromUtf8(temp)); }
 
-		{ char temp[25] = "Ses Kontrolü(Kabin)"; ui->CALL_VOL_TITLE->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "Mikrofon";          ui->CALL_MIC_VOL_LABEL->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "Hoparlör";          ui->CALL_SPK_VOL_LABEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Ses Kontrolü(Kabin)"; ui->CAB_VOL_TITLE->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Mikrofon";          ui->CAB_MIC_VOL_LABEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Hoparlör";          ui->CAB_SPK_VOL_LABEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Ses Kontrolü(Yolcu)"; ui->PASSENGER_VOL_TITLE->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "İÇ";                ui->PASSENGER_IN_VOL_LABEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "DIŞ";               ui->PASSENGER_OUT_VOL_LABEL->setText(QString::fromUtf8(temp)); }
 
-        { char temp[25] = "Dil Seçimi";        ui->LANG_TITLE->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Ses Kontrolü(Kabin)"; ui->CALL_VOL_TITLE->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Mikrofon";          ui->CALL_MIC_VOL_LABEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Hoparlör";          ui->CALL_SPK_VOL_LABEL->setText(QString::fromUtf8(temp)); }
 
-        { char temp[25] = "İstasyon";             ui->FUNC_STATION->setText(QString::fromUtf8(temp)); }
-        //{ char temp[25] = "İptal";             ui->FUNC_CANCEL->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "İÇ";					ui->FUNC_IN->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "DIŞ";				ui->FUNC_OUT->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "LRM";				ui->FUNC_LRM->setText(QString::fromUtf8(temp)); }
-		{ char temp[25] = "PIB";				ui->FUNC_PIB->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "Dil Seçimi";        ui->LANG_TITLE->setText(QString::fromUtf8(temp)); }
 
-        { char temp[25] = "Dokunmatik\nKalibrasyon"; ui->TOUCH_CAL->setText(QString::fromUtf8(temp)); }
-        { char temp[25] = "KABİN";            ui->CAB_BUTTON->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "İstasyon";             ui->FUNC_STATION->setText(QString::fromUtf8(temp)); }
+    //{ char temp[25] = "İptal";             ui->FUNC_CANCEL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "İÇ";					ui->FUNC_IN->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "DIŞ";				ui->FUNC_OUT->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "LRM";				ui->FUNC_LRM->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "PIB";				ui->FUNC_PIB->setText(QString::fromUtf8(temp)); }
+
+    { char temp[25] = "Dokunmatik\nKalibrasyon"; ui->TOUCH_CAL->setText(QString::fromUtf8(temp)); }
+    { char temp[25] = "KABİN";            ui->CAB_BUTTON->setText(QString::fromUtf8(temp)); }
     }
 }
 
@@ -2918,4 +4367,1221 @@ void MainWindow::mousePressEvent(QMouseEvent* event)
 		ui->COP_IP_Label->setVisible(false);
 		count = 0;
 	}
+}
+
+
+QString passwd;
+QString inputstr;
+void MainWindow::on_NUMBER_1_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    inputstr += "1";
+}
+
+void MainWindow::on_NUMBER_2_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("2");
+    inputstr += "2";
+}
+
+void MainWindow::on_NUMBER_3_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("3");
+    inputstr += "3";
+}
+
+void MainWindow::on_NUMBER_4_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("4");
+    inputstr += "4";
+}
+
+void MainWindow::on_NUMBER_5_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("5");
+    inputstr += "5";
+}
+void MainWindow::on_NUMBER_6_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    ///ui->TEXT_PASSWD->insertPlainText("6");
+    inputstr += "6";
+}
+void MainWindow::on_NUMBER_7_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("7");
+    inputstr += "7";
+}
+void MainWindow::on_NUMBER_8_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("8");
+    inputstr += "8";
+}
+void MainWindow::on_NUMBER_9_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("9");
+    inputstr += "9";
+}
+void MainWindow::on_NUMBER_0_clicked()
+{
+    ui->TEXT_PASSWD->insertPlainText("*");
+    //ui->TEXT_PASSWD->insertPlainText("0");
+    inputstr += "0";
+}
+
+void MainWindow::on_NUMBER_OK_clicked()
+{
+
+    QByteArray ba = inputstr.toAscii();
+
+    const char *c_str = ba.data();
+     // inputstr = ui->TEXT_PASSWD->toPlainText();
+    printf("passwd %s\r\n",c_str);
+
+    passwd = "0000";
+    if(passwd == inputstr) {
+        qDebug()<<"passwd ok";
+
+
+
+        ui->MENU->setCurrentIndex(LOGDOWN_MENU);
+/*
+        ui->MENU->setCurrentIndex(SWUPDATE_MENU);
+        m_thread->start();
+        ui->Master_AVC_IP_2->setVisible(true);
+        ui->Master_AVC_IP_2->setText(AVC_Master_IPName);
+*/
+        //ui->STATUS->setStyleSheet("background-color: black"); //performence is down,,use setstylesheet :(
+
+    }else {
+        qDebug()<<"passwd not ok";
+    }
+
+
+}
+
+//void MainWindow::on_thread_finish(const int value)
+//{
+//    printf("jhlee on_thread_finish\r\n");
+//}
+
+//void MainWindow::on_file_thread_finish(const int value)
+//{
+//    printf("jhlee on_file_thread_finish\r\n");
+//}
+
+void MainWindow::on_NUMBER_RESET_clicked()
+{
+    ui->TEXT_PASSWD->clear();
+    inputstr.clear();
+
+}
+
+
+
+void MainWindow::on_SUBDEVICE_PIB_clicked()
+{
+    const int rowCount = 8;
+    const int rowTableCount = 9;
+    g_Current_qlist_dev = PIB;
+
+    for(int i =0;i<rowCount;i++) {
+        PIB_device[i][1] = QString::number(g_SubDevice[i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[i].SwCurVer&0x00FF);
+    }
+    //usb sw version
+    for(int i =0;i<rowCount;i++) {
+        PIB_device[i][2] = QString::number(UsbSwVer.PIBSwVer);		
+        g_SubDevice[i].SwUsbVer = (UsbSwVer.PIBSwVer)  ;
+        g_SubDevice[i].SwUsbVer =  (g_SubDevice[i].SwUsbVer <<8) + (UsbSwVer.PIBSwVer *100) ;
+    }	
+
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[i].SwCurVer >0 ) && (UsbSwVer.PIBSwVer>0)) {
+
+            if(g_iSelectedDev == i){
+                PIB_device[i][4] = UpString[1];   /* Update Updating UI present*/
+                //    printf("jhlee g_SubDevice[i].Update_flag %d %d ",g_SubDevice[i].Update_flag.UpdateOK,g_SubDevice[i].Update_flag.UpdateError );
+                if( g_SubDevice[i].Update_flag.UpdateOK == 0x01){
+                    PIB_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[i].Update_flag.UpdateError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[2];     /* PIB_device[i][3] Update Complete, Disabling EWF */
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+            }else {
+                PIB_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+    /* usb에 bin . txt 파일이 있어야만 버전정보현시 -> usb update.c */
+	
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowTableCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(PIB_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+
+QString SCAM_device[16][5] = {
+    { "SCAM..9.177(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..9.178(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..9.179(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..9.180(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..10.177(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..10.178(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..10.179(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..10.180(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..11.177(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..11.178(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..11.179(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..11.180(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..12.177(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..12.178(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..12.179(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "SCAM..12.180(128)" ,"", "00.00","Bekleniliyor ...","",},
+};
+
+void MainWindow::on_SUBDEVICE_SCAM_clicked()
+{
+    const int rowCount = 16;
+    const int scam_cnt = 8;
+
+    g_Current_qlist_dev = SCAM;
+
+    for(int i =0;i<rowCount;i++) {
+        SCAM_device[i][1] = QString::number(g_SubDevice[scam_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[scam_cnt+i].SwCurVer&0x00FF);
+    }
+	
+    for(int i =0;i<rowCount;i++) {
+        SCAM_device[i][2] = QString::number(UsbSwVer.SCAMSwVer);		
+        g_SubDevice[scam_cnt+i].SwUsbVer = (UsbSwVer.SCAMSwVer)  ;
+        g_SubDevice[scam_cnt+i].SwUsbVer =  (g_SubDevice[scam_cnt+i].SwUsbVer <<8) + (UsbSwVer.SCAMSwVer *100) ;
+    }		
+	
+    for(int i =0;i<rowCount;i++) {
+        if((g_SubDevice[scam_cnt+i].SwCurVer >0 ) && (UsbSwVer.SCAMSwVer>0)) {
+
+            if(g_iSelectedDev == scam_cnt + i){
+
+                SCAM_device[i][4] = UpString[1];
+                if( g_SubDevice[scam_cnt+i].Update_flag.UpdateOK == 0x01){
+                    SCAM_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[scam_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    SCAM_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                SCAM_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(SCAM_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString FCAM_device[9][5] = {
+    { "FCAM..9.145(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "FCAM..12.145(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+};
+void MainWindow::on_SUBDEVICE_FCAM_clicked()
+{
+    const int rowCount = 2;
+    const int fcam_cnt = 24;
+    const int rowTableCount = 9;
+
+    g_Current_qlist_dev = FCAM;
+	
+    for(int i =0;i<rowCount;i++) {
+        FCAM_device[i][1] = QString::number(g_SubDevice[fcam_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[fcam_cnt+i].SwCurVer&0x00FF);
+    }
+	
+    for(int i =0;i<rowCount;i++) {
+        FCAM_device[i][2] = QString::number(UsbSwVer.FCAMSwVer);
+        g_SubDevice[fcam_cnt+i].SwUsbVer = (UsbSwVer.FCAMSwVer)  ;
+        g_SubDevice[fcam_cnt+i].SwUsbVer =  (g_SubDevice[fcam_cnt+i].SwUsbVer <<8) + (UsbSwVer.FCAMSwVer *100) ;
+
+    }		
+	
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[fcam_cnt+i].SwCurVer >0 ) && (UsbSwVer.FCAMSwVer>0)) {
+
+            if(g_iSelectedDev == fcam_cnt + i){
+
+                FCAM_device[i][4] = UpString[1];
+                if( g_SubDevice[fcam_cnt+i].Update_flag.UpdateOK == 0x01){
+                    FCAM_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[fcam_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    FCAM_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                FCAM_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+		
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowTableCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(FCAM_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString COP_device[9][5] = {
+    { "COP..9.65(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "COP..12.65(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+};
+void MainWindow::on_SUBDEVICE_COP_clicked()
+{
+
+    const int rowCount = 2;
+    const int cop_cnt = 26;
+    const int rowTableCount = 9;
+
+    g_Current_qlist_dev = COP;
+	
+    for(int i =0;i<rowCount;i++) {
+        COP_device[i][1] = QString::number(g_SubDevice[cop_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[cop_cnt+i].SwCurVer&0x00FF);
+    }
+	
+	
+    for(int i =0;i<rowCount;i++) {
+        COP_device[i][2] = QString::number(UsbSwVer.COPSwVer);		
+        g_SubDevice[cop_cnt + i].SwUsbVer = (UsbSwVer.COPSwVer)  ;
+        g_SubDevice[cop_cnt + i].SwUsbVer =  (g_SubDevice[cop_cnt + i].SwUsbVer <<8) + (UsbSwVer.COPSwVer *100) ;
+      //  printf("SwUsbVer %d %d.%d \r\n",i  , g_SubDevice[i].SwUsbVer<<8, g_SubDevice[i].SwUsbVer&0x00ff );
+      //  printf("SwUsbVer %d %d.%d \r\n",cop_cnt + i  , g_SubDevice[cop_cnt + i].SwUsbVer<<8, g_SubDevice[cop_cnt + i].SwUsbVer&0x00ff );
+    }		
+	
+
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[cop_cnt+i].SwCurVer >0 ) && (UsbSwVer.COPSwVer>0)) {
+
+            if(g_iSelectedDev == cop_cnt + i){
+
+                COP_device[i][4] = UpString[1];
+                if( g_SubDevice[cop_cnt+i].Update_flag.UpdateOK == 0x01){
+                    COP_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[cop_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    COP_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                COP_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+	
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowTableCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(COP_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString PAMP_device[9][columnCount] = {
+	{ "PAMP..9.97(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..9.98(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..10.97(128)","", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..10.98(128)","", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..11.97(128)","", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..11.98(128)","", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..12.97(128)","", "00.00","Bekleniliyor ...","",},
+	{ "PAMP..12.98(128)","", "00.00","Bekleniliyor ...","",},
+	{ "","", "","","",},
+};
+void MainWindow::on_SUBDEVICE_PAMP_clicked()
+{
+
+    const int rowCount = 8;
+    const int pamp_cnt = 28;
+    const int rowTableCount = 9;
+
+    g_Current_qlist_dev = PAMP;
+
+    for(int i =0;i<rowCount;i++) {
+        PAMP_device[i][1] = QString::number(g_SubDevice[pamp_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[pamp_cnt+i].SwCurVer&0x00FF);
+    }
+	
+	for(int i =0;i<rowCount;i++) {
+        PAMP_device[i][2] = QString::number(UsbSwVer.PAMPSwVer);		
+        g_SubDevice[pamp_cnt+i].SwUsbVer = (UsbSwVer.PAMPSwVer)  ;
+        g_SubDevice[pamp_cnt+i].SwUsbVer =  (g_SubDevice[pamp_cnt+i].SwUsbVer <<8) + (UsbSwVer.PAMPSwVer *100) ;
+    }		
+	
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[pamp_cnt+i].SwCurVer >0 ) && (UsbSwVer.PAMPSwVer>0)) {
+
+            if(g_iSelectedDev == pamp_cnt + i){
+
+                PAMP_device[i][4] = UpString[1];
+                if( g_SubDevice[pamp_cnt+i].Update_flag.UpdateOK == 0x01){
+                    PAMP_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[pamp_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    PAMP_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                PAMP_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowTableCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(PAMP_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString PEI_device[16][columnCount] = {
+	{ "PEI..9.113(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..9.114(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..9.115(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..9.116(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..10.113(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..10.114(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..10.115(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..10.116(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..11.113(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..11.114(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..11.115(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..11.116(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..12.113(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..12.114(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..12.115(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PEI..12.116(128)" ,"", "00.00","Bekleniliyor ...","",},
+};
+
+
+void MainWindow::on_SUBDEVICE_PEI_clicked()
+{
+
+    const int rowCount = 16;
+    const int pei_cnt = 36;
+    g_Current_qlist_dev = PEI;
+
+    for(int i =0;i<rowCount;i++) {
+        PEI_device[i][1] = QString::number(g_SubDevice[pei_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[pei_cnt+i].SwCurVer&0x00FF);
+    }
+	
+	for(int i =0;i<rowCount;i++) {
+        PEI_device[i][2] = QString::number(UsbSwVer.PEISwVer);
+        g_SubDevice[pei_cnt+i].SwUsbVer = (UsbSwVer.PEISwVer)  ;
+        g_SubDevice[pei_cnt+i].SwUsbVer =  (g_SubDevice[pei_cnt+i].SwUsbVer <<8) + (UsbSwVer.PEISwVer *100) ;
+    }		
+		
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[pei_cnt+i].SwCurVer >0 ) && (UsbSwVer.PEISwVer>0)) {
+
+            if(g_iSelectedDev == pei_cnt + i){
+
+                PEI_device[i][4] = UpString[1];
+                if( g_SubDevice[pei_cnt+i].Update_flag.UpdateOK == 0x01){
+                    PEI_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[pei_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    PEI_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                PEI_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(PEI_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString LRM_device[32][columnCount] = {
+	{ "LRM..9.81(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.82(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.83(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.84(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.85(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.86(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.87(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..9.88(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.81(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.82(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.83(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.84(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.85(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.86(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.87(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..10.88(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.81(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.82(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.83(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.84(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.85(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.86(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.87(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..11.88(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.81(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.82(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.83(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.84(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.85(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.86(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.87(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "LRM..12.88(128)" ,"", "00.00","Bekleniliyor ...","",},
+};
+
+void MainWindow::on_SUBDEVICE_LRM_clicked()
+{
+    const int rowCount = 32;
+    const int lrm_cnt = 52;
+     g_Current_qlist_dev = LRM;
+
+    for(int i =0;i<rowCount;i++) {
+        LRM_device[i][1] = QString::number(g_SubDevice[lrm_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[lrm_cnt+i].SwCurVer&0x00FF);
+    }
+
+	for(int i =0;i<rowCount;i++) {
+        LRM_device[i][2] = QString::number(UsbSwVer.LRMSwVer);		
+        g_SubDevice[lrm_cnt+i].SwUsbVer = (UsbSwVer.LRMSwVer)  ;
+        g_SubDevice[lrm_cnt+i].SwUsbVer =  (g_SubDevice[lrm_cnt+i].SwUsbVer <<8) + (UsbSwVer.LRMSwVer *100) ;
+    }		
+		
+	
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[lrm_cnt+i].SwCurVer >0 ) && (UsbSwVer.LRMSwVer>0)) {
+
+            if(g_iSelectedDev == lrm_cnt + i){
+
+                LRM_device[i][4] = UpString[1];
+                if( g_SubDevice[lrm_cnt+i].Update_flag.UpdateOK == 0x01){
+                    LRM_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[lrm_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    LRM_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                LRM_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(LRM_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+QString PID_device[48][columnCount] = {
+	{ "PID..9.161(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.162(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.163(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.164(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.165(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.166(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.167(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.168(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.169(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.170(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.171(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..9.172(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.161(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.162(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.163(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.164(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.165(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.166(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.167(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.168(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.169(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.170(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.171(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..10.172(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.161(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.162(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.163(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.164(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.165(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.166(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.167(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.168(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.169(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.170(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.171(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..11.172(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.161(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.162(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.163(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.164(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.165(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.166(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.167(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.168(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.169(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.170(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.171(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "PID..12.172(128)" ,"", "00.00","Bekleniliyor ...","",},
+};
+
+void MainWindow::on_SUBDEVICE_PID_clicked()
+{
+
+
+    const int rowCount = 48;
+    const int pid_cnt = 84;
+
+    g_Current_qlist_dev = PID;
+    for(int i =0;i<rowCount;i++) {
+        PID_device[i][1] = QString::number(g_SubDevice[pid_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[pid_cnt+i].SwCurVer&0x00FF);
+    }
+	for(int i =0;i<rowCount;i++) {
+        PID_device[i][2] = QString::number(UsbSwVer.PIDSwVer);		
+        g_SubDevice[pid_cnt+i].SwUsbVer = (UsbSwVer.PIDSwVer)  ;
+        g_SubDevice[pid_cnt+i].SwUsbVer =  (g_SubDevice[pid_cnt+i].SwUsbVer <<8) + (UsbSwVer.PIDSwVer *100) ;
+    }		
+		
+
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[pid_cnt+i].SwCurVer >0 ) && (UsbSwVer.PIDSwVer>0)) {
+
+            if(g_iSelectedDev == pid_cnt + i){
+
+                PID_device[i][4] = UpString[1];
+                if( g_SubDevice[pid_cnt+i].Update_flag.UpdateOK == 0x01){
+                    PID_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[pid_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    PID_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                PID_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(PID_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString DIF_device[9][columnCount] = {
+	{ "DIF..9.209(128)" ,"", "00.00","Bekleniliyor ...","",},	
+    { "DIF..12.209(128)" ,"", "00.00","Bekleniliyor ...","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+    { "","", "","","",},
+};
+
+
+void MainWindow::on_SUBDEVICE_DIF_clicked()
+{
+    const int rowCount = 2;
+    const int dif_cnt = 132;
+    const int rowTableCount = 9;
+     g_Current_qlist_dev = DIF;
+
+    for(int i =0;i<rowCount;i++) {
+        DIF_device[i][1] = QString::number(g_SubDevice[dif_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[dif_cnt+i].SwCurVer&0x00FF);
+    }
+	
+	for(int i =0;i<rowCount;i++) {
+        DIF_device[i][2] = QString::number(UsbSwVer.DIFSwVer);
+        g_SubDevice[dif_cnt+i].SwUsbVer = (UsbSwVer.DIFSwVer)  ;
+        g_SubDevice[dif_cnt+i].SwUsbVer =  (g_SubDevice[dif_cnt+i].SwUsbVer <<8) + (UsbSwVer.DIFSwVer *100) ;
+    }		
+		
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[dif_cnt+i].SwCurVer >0 ) && (UsbSwVer.DIFSwVer>0)) {
+
+            if(g_iSelectedDev == dif_cnt + i){
+
+                DIF_device[i][4] = UpString[1];
+                if( g_SubDevice[dif_cnt+i].Update_flag.UpdateOK == 0x01){
+                    DIF_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[dif_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    DIF_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                DIF_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+
+	//DISSwVer
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowTableCount);
+
+	
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(DIF_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+QString NVR_device[9][columnCount] = {
+	{ "NVR..9.241(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "NVR..12.241(128)" ,"", "00.00","Bekleniliyor ...","",},
+	{ "","", "","","",},
+	{ "","", "","","",},
+	{ "","", "","","",},
+	{ "","", "","","",},
+	{ "","", "","","",},
+	{ "","", "","","",},
+	{ "","", "","","",},
+};
+
+
+void MainWindow::on_SUBDEVICE_NVR_clicked()
+{
+
+
+    const int rowCount = 2;
+    const int nvr_cnt = 134;
+    const int rowTableCount = 9;
+    g_Current_qlist_dev = NVR;
+    for(int i =0;i<rowCount;i++) {
+        NVR_device[i][1] = QString::number(g_SubDevice[nvr_cnt+i].SwCurVer>>8) + "."+ QString::number(g_SubDevice[nvr_cnt+i].SwCurVer&0x00FF);
+    }
+	
+	for(int i =0;i<rowCount;i++) {
+        NVR_device[i][2] = QString::number(UsbSwVer.NVRSwVer);
+        g_SubDevice[nvr_cnt+i].SwUsbVer = (UsbSwVer.NVRSwVer)  ;
+        g_SubDevice[nvr_cnt+i].SwUsbVer =  (g_SubDevice[nvr_cnt+i].SwUsbVer <<8) + (UsbSwVer.NVRSwVer *100) ;
+    }		
+		
+    for(int i =0;i<rowCount;i++) {
+
+        if((g_SubDevice[nvr_cnt+i].SwCurVer >0 ) && (UsbSwVer.NVRSwVer>0)) {
+
+            if(g_iSelectedDev == nvr_cnt + i){
+
+                NVR_device[i][4] = UpString[1];
+                if( g_SubDevice[nvr_cnt+i].Update_flag.UpdateOK == 0x01){
+                    NVR_device[i][3] = UpStatusString[3];
+                     g_iSelectedDev = 255;
+                }else if(g_SubDevice[nvr_cnt+i].Update_flag.UpdateError ==  0x01) {
+                    NVR_device[i][3] = UpStatusString[2];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[4];
+
+                }else if(g_SubDevice[i].Ftpflag.FtpError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[5];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownOK ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[6];
+
+                }else if(g_SubDevice[i].Ftpflag.fileDownError ==  0x01) {
+                    PIB_device[i][3] = UpStatusString[7];
+
+                }
+
+            }else {
+                NVR_device[i][4] = UpString[0];
+            }
+
+        }
+    }
+    ui->SUBDEVICE_TABLE->setColumnCount(columnCount);
+    ui->SUBDEVICE_TABLE->setRowCount(rowTableCount);
+
+    for(int row =0;row< ui->SUBDEVICE_TABLE->rowCount();++row) {
+        for(int column =0; column < ui->SUBDEVICE_TABLE->columnCount() ;++column) {
+            QTableWidgetItem *newItem = new QTableWidgetItem(NVR_device[row][column] ,0);
+            ui->SUBDEVICE_TABLE->setItem(row,column,newItem);
+            if(row%2 == 0){
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::black);
+                ui->SUBDEVICE_TABLE->item(row,column)->setTextColor(Qt::white);
+            }else {
+                ui->SUBDEVICE_TABLE->item(row,column)->setBackgroundColor(Qt::darkMagenta);
+            }
+
+        }
+
+    }
+}
+
+
+void MainWindow::finishedUpdateFileList_1(void)
+{
+    qDebug() <<"finishedUpdateFileList";
+
+}
+void MainWindow::SwUpdateCellSelected(int nRow, int nCol)
+{
+
+    //char swver[2]={0};//version request... usb sw version
+    int  iSelectedDev = 0;
+    //short s_swver = 73;
+    //gvalue is clicked event setting()
+    switch(g_Current_qlist_dev) {
+        case PIB:
+            iSelectedDev = PIB_INDEX + nRow;
+            break;
+        case SCAM:
+            iSelectedDev = SCAM_INDEX + nRow;
+            break;
+        case FCAM:
+            iSelectedDev = FCAM_INDEX + nRow;
+            break;
+        case COP:
+            iSelectedDev = COP_INDEX + nRow;
+            break;
+        case PAMP:
+            iSelectedDev = PAMP_INDEX + nRow;
+            break;
+        case PEI:
+            iSelectedDev = PEI_INDEX + nRow;
+            break;
+        case LRM:
+            iSelectedDev = LRM_INDEX + nRow;
+            break;
+        case PID:
+            iSelectedDev = PID_INDEX + nRow;
+            break;
+        case DIF:
+            iSelectedDev = DIF_INDEX + nRow;
+            break;
+        case NVR:
+            iSelectedDev = NVR_INDEX + nRow;
+            break;
+        default :
+            /*NULL */
+            break;
+
+    }
+
+
+    /*Send TO AVC SW UPDATE START PACKET */
+  if(nCol==4) {
+    /*vaild version*/ //UsbSwVer.PIBSwVer
+      g_iSelectedDev = iSelectedDev;
+      printf("\r\n===========MMI to AVC UPDATE START Request===>>>\r\n");
+      qDebug()<<"====Cell at row "+ QString::number(nRow)+ " column "+ QString::number(nCol)+" was clicked.";
+      qDebug()<<"====jhlee iSelectedDev"+ QString::number(iSelectedDev ) + " "+QString::number(g_Current_qlist_dev);
+
+      printf("====request version %d.%d %d \r\n", g_SubDevice[iSelectedDev].SwUsbVer >>8, g_SubDevice[iSelectedDev].SwUsbVer & 0x00ff,g_iSelectedDev);
+      send_cop2avc_cmd_sw_update_start(g_SubDevice[iSelectedDev].SwUsbVer,
+                                       g_SubDevice[iSelectedDev].DeviceAddr4,g_SubDevice[iSelectedDev].DeviceAddr3,
+                                       g_SubDevice[iSelectedDev].DeviceAddr2,g_SubDevice[iSelectedDev].DeviceAddr1,	g_Current_qlist_dev);
+      //PIB_device[nRow][4] = UpString[1]; /* print ui updating*/
+      printf("\r\n=================END == Requeset=============>>>\r\n");
+
+
+  }
+}
+
+void MainWindow::StatusUpdate(void)
+{
+    refresh_status_device();
+
+    ui->Master_AVC_IP_2->setVisible(true);
+    ui->Master_AVC_IP_2->setText(AVC_Master_IPName);
+    /* USB status information ui */
+    if( iDetectFlag==1)
+    {
+        ui->USB_INSERT->setPixmap(QPixmap(":/usb_on.jpg"));
+        ui->USB_INSERT->show();
+        ui->SUBDEVICE_FILE_UP->setStyleSheet(COLOR_FUNC_NUM);
+        ui->SUBDEVICE_FILE_UP->setIcon(QIcon(QPixmap(":/fileupload_over.jpg")));
+        ui->SUBDEVICE_FILE_UP->setIconSize(QSize(90,70));
+        ui->SUBDEVICE_FILE_UP->show();
+        ui->SUBDEVICE_FILE_UP->setDisabled(false);
+
+    }else
+    {
+        ui->SUBDEVICE_FILE_UP->setIcon(QIcon(QPixmap(":/fileupload_off.jpg")));
+        ui->SUBDEVICE_FILE_UP->setIconSize(QSize(90,70));
+        ui->SUBDEVICE_FILE_UP->show();
+        ui->USB_INSERT->setPixmap(QPixmap(":/usb_off.jpg"));
+        ui->USB_INSERT->show();
+        ui->SUBDEVICE_FILE_UP->setDisabled(false);
+
+    }
+}
+
+void MainWindow::SoftwareUpdateStatus(void)
+{
+    /* click update button*/
+
+    switch(g_Current_qlist_dev) {
+        case PIB:
+           on_SUBDEVICE_PIB_clicked();
+            break;
+        case SCAM:
+           on_SUBDEVICE_SCAM_clicked();
+            break;
+        case FCAM:
+           on_SUBDEVICE_FCAM_clicked();
+            break;
+        case COP:
+            on_SUBDEVICE_COP_clicked();
+            break;
+        case PAMP:
+           on_SUBDEVICE_PAMP_clicked();
+            break;
+        case PEI:
+           on_SUBDEVICE_PEI_clicked();
+            break;
+        case LRM:
+            on_SUBDEVICE_LRM_clicked();
+            break;
+        case PID:
+            on_SUBDEVICE_PID_clicked();
+            break;
+        case DIF:
+            on_SUBDEVICE_DIF_clicked();
+            break;
+        case NVR:
+            on_SUBDEVICE_NVR_clicked();
+            break;
+        default :
+            /*NULL */
+            break;
+
+    }   
+//    printf(".");
+
+
+}
+
+
+/*
+ * ftp connect, not delete avc sw_update current sw version, overwrite and
+ * send sw usb version to avc server
+*/
+
+void MainWindow::on_SUBDEVICE_FILE_UP_clicked()
+{
+    QList<QString> list;
+    QString strDir = "/media/usb0/sw_update/";
+    QDirIterator iterDir(strDir, QDir::Files, QDirIterator::NoIteratorFlags);
+    //static int clicked_flag =0; clicked..:<
+
+    if( iDetectFlag==0){
+        qDebug()<<"iDetectFlag return";
+        return;
+    }
+    if(iDetectFlag ==1){
+        CTM_StatusUpdateTimer->stop();
+        CTM_SWUpdateTimer->stop();
+        while (iterDir.hasNext())
+        {
+            list.push_back(iterDir.next());
+        }
+        m_pFtpclient->puts( &list );
+
+    }
+
+
+}
+
+void MainWindow::on_bt_LIST_DOWN_clicked()
+{
+    scrollvalue =  scrollvalue +3;
+    if(scrollvalue >ui->SUBDEVICE_TABLE->verticalScrollBar()->maximum()) {
+        scrollvalue = ui->SUBDEVICE_TABLE->verticalScrollBar()->maximum();
+    }
+
+    ui->SUBDEVICE_TABLE->verticalScrollBar()->setValue(scrollvalue);
+        qDebug()<<"current scroll"<<scrollvalue;
+}
+void MainWindow::on_bt_LIST_UP_clicked()
+{
+    scrollvalue =  scrollvalue -3 ;
+    if(scrollvalue <0) {
+        scrollvalue = 0;
+    }
+    ui->SUBDEVICE_TABLE->verticalScrollBar()->setValue(scrollvalue);
+    qDebug()<<"current scroll"<<scrollvalue;
+
+}
+
+
+void MainWindow::ftpClient_finished( qint32,qint32 )
+{
+
+    qDebug()<<"ftpClient_finished";
+    CTM_StatusUpdateTimer->start(CTM_STATUS_UPDATE_TIME);
+    CTM_SWUpdateTimer->start(CTM_STATUS_UPDATE_TIME);
 }
